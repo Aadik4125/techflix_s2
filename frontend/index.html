@@ -1,22 +1,19 @@
-﻿
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta name="theme-color" content="#090e17">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="COGNIVARA">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>COGNIVARA – AI Cognitive Risk Detection</title>
-  <link rel="manifest" href="/manifest.webmanifest">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
     href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Outfit:wght@300;400;500;600;700;800&display=swap"
     rel="stylesheet">
-    <link rel="stylesheet" href="styles/main.css?v=2026-04-16-7">
+    <link rel="stylesheet" href="styles/main.css">
+    <!-- Replace with your real Google OAuth Client ID (public, not a secret) to enable "Sign in with Google". -->
+    <meta name="google-client-id" content="YOUR_GOOGLE_CLIENT_ID">
+    <script src="https://accounts.google.com/gsi/client" async defer onload="initGoogleSignIn()"></script>
 </head>
 
 <body>
@@ -49,9 +46,10 @@
     </div>
     <div class="nav-links">
       <a href="#" onclick="goHome();return false;" id="nav-home" class="active">Home</a>
-      <a href="#" onclick="scrollToRecord();return false;" id="nav-record">Record</a>
+      <a href="#" onclick="startCheckIn();return false;" id="nav-record" style="display:none;">Check In</a>
+      <a href="#" onclick="showLogin();return false;" id="nav-record-signedout">Check In</a>
+      <a href="#" onclick="startDemo();return false;" id="nav-demo">Try Demo</a>
       <a href="#" onclick="showDashboardNav();return false;" id="nav-dash">Dashboard</a>
-      <a href="#" onclick="showScientificFoundation();return false;" id="nav-foundation">Scientific Foundation</a>
     </div>
     <div class="user-area">
       <div class="backend-status checking" id="backend-status" onclick="refreshBackendStatus(true)">
@@ -60,6 +58,14 @@
       </div>
       <button id="login-btn" class="user-button" onclick="showLogin()">Login</button>
       <div id="profile-btn" class="user-avatar" style="display:none;" onclick="toggleProfile()"></div>
+      <button id="mobile-menu-btn" class="mobile-menu-btn" onclick="toggleMobileMenu()" aria-label="Menu">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round">
+          <line x1="3" y1="6" x2="21" y2="6" />
+          <line x1="3" y1="12" x2="21" y2="12" />
+          <line x1="3" y1="18" x2="21" y2="18" />
+        </svg>
+      </button>
       <div id="profile-dropdown" class="profile-dropdown">
         <div class="profile-menu">
           <button class="menu-btn menu-profile" onclick="showProfilePage()">
@@ -95,8 +101,14 @@
     </div>
   </nav>
 
-  <!-- MAIN CONTENT AREA FOR DYNAMIC COMPONENTS -->
-  <div id="main-content"></div>
+  <!-- MOBILE NAV MENU -->
+  <div id="mobile-nav-menu" class="mobile-nav-menu">
+    <a href="#" onclick="goHome();closeMobileMenu();return false;">Home</a>
+    <a href="#" onclick="startCheckIn();closeMobileMenu();return false;" id="mobile-nav-record" style="display:none;">Check In</a>
+    <a href="#" onclick="showLogin();closeMobileMenu();return false;" id="mobile-nav-record-signedout">Check In</a>
+    <a href="#" onclick="startDemo();closeMobileMenu();return false;">Try Demo</a>
+    <a href="#" onclick="showDashboardNav();closeMobileMenu();return false;">Dashboard</a>
+  </div>
 
   <!-- COMPARE FLOAT BUTTON (shown after analysis) -->
   <button class="compare-float-btn" id="compare-float-btn" onclick="showComparePage()">
@@ -119,11 +131,24 @@
           <circle cx="12" cy="7" r="4" />
         </svg>
       </div>
-      <h2>Create Account</h2>
+
+      <div id="google-signin-btn" style="display:flex; justify-content:center; margin-bottom:14px;"></div>
+      <div id="google-signin-divider" class="modal-divider" style="display:none;"><span>or</span></div>
+
+      <div style="display:flex; gap:8px; margin-bottom:16px; border-bottom:1px solid var(--border);">
+        <button type="button" id="login-tab-signup" class="modal-tab-btn active-tab" onclick="showSignupTab()">Sign
+          Up</button>
+        <button type="button" id="login-tab-login" class="modal-tab-btn" onclick="showLoginTab()">Log In</button>
+      </div>
+
       <form id="login-form" onsubmit="submitSignup(event)">
-        <label>Name<input type="text" id="input-name" required placeholder="Your full name"></label>
+        <label>Name<input type="text" id="input-name" required minlength="2" placeholder="Your full name"></label>
         <label>Email<input type="email" id="input-email" required placeholder="you@example.com"></label>
-        <label>Password (Optional)<input type="password" id="input-password" placeholder="Optional for now"></label>
+        <label>Password<input type="password" id="input-password" required minlength="8"
+            placeholder="At least 8 characters">
+          <span id="password-strength-hint" style="display:block; font-size:11px; color:var(--text-secondary); margin-top:4px;">Use
+            8+ characters. Mixing cases, numbers, or symbols makes it stronger.</span>
+        </label>
         <div style="display:flex; gap:10px;">
           <label style="flex:1;">Age<input type="number" id="input-age" min="0" required placeholder="e.g. 34"></label>
           <label style="flex:1;">Gender
@@ -137,8 +162,17 @@
           </label>
         </div>
         <div class="modal-actions">
-          <button type="submit" class="btn-primary" style="padding:10px 20px;font-size:14px;">Save &amp;
-            Continue</button>
+          <button type="submit" class="btn-primary" style="padding:10px 20px;font-size:14px;">Create Account</button>
+          <button type="button" class="btn-secondary" style="padding:10px 20px;font-size:14px;"
+            onclick="hideLogin()">Cancel</button>
+        </div>
+      </form>
+
+      <form id="login-form-login" class="hidden" onsubmit="submitLogin(event)">
+        <label>Email<input type="email" id="input-login-email" required placeholder="you@example.com"></label>
+        <label>Password<input type="password" id="input-login-password" required placeholder="Your password"></label>
+        <div class="modal-actions">
+          <button type="submit" class="btn-primary" style="padding:10px 20px;font-size:14px;">Log In</button>
           <button type="button" class="btn-secondary" style="padding:10px 20px;font-size:14px;"
             onclick="hideLogin()">Cancel</button>
         </div>
@@ -157,11 +191,23 @@
       <p>COGNIVARA analyzes speech biomarkers to detect subtle cognitive strain patterns up to 6 months before visible
         symptoms appear.</p>
       <div class="hero-buttons">
-        <a href="#" class="btn-primary" onclick="scrollToRecord();return false;">
+        <a href="#" class="btn-primary" id="hero-checkin-btn" onclick="startCheckIn();return false;" style="display:none;">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
             <circle cx="12" cy="12" r="8" />
           </svg>
-          Start 30-Second Recording
+          Check In Now
+        </a>
+        <a href="#" class="btn-primary" id="hero-signup-btn" onclick="showLogin();return false;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+            <circle cx="12" cy="12" r="8" />
+          </svg>
+          Sign Up to Check In
+        </a>
+        <a href="#" class="btn-secondary" onclick="startDemo();return false;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="5 3 19 12 5 21 5 3" />
+          </svg>
+          Try the Demo (no signup)
         </a>
       </div>
       <div class="hero-stats">
@@ -192,9 +238,10 @@
   <div id="recording-section">
     <section id="recording" style="padding-top:0;">
       <div style="text-align:center;margin-bottom:48px;" class="reveal">
-        <div class="section-eyebrow">Voice Analysis</div>
-        <h2 class="section-title">Establish Your Baseline</h2>
-        <p class="section-sub">Complete 3 short recordings to calibrate your personal cognitive baseline.</p>
+        <div class="section-eyebrow" id="recording-eyebrow">Voice Analysis</div>
+        <h2 class="section-title" id="recording-title">Establish Your Baseline</h2>
+        <p class="section-sub" id="recording-subtitle">Complete 3 short recordings to calibrate your personal
+          cognitive baseline.</p>
       </div>
       <div class="recording-section reveal">
 
@@ -545,218 +592,35 @@
     </div>
   </section>
 
-  <!-- ══════════ SCIENTIFIC FOUNDATION ══════════ -->
-  <section id="scientific-foundation" style="display:none; padding-top:96px;">
-    <div class="scientific-container">
-        <!-- Hero Section -->
-        <div class="hero-section reveal">
-            <h1 class="hero-title">Scientific Foundation</h1>
-            <p class="hero-subtitle">Understanding cognition through voice-based pattern analysis</p>
-        </div>
-
-        <!-- Research Evidence Section -->
-        <h2 class="section-header reveal">Research Evidence</h2>
-
-        <div class="card reveal" style="margin-bottom: 2rem;">
-            <h3 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem; color: #c084fc;">Why Voice Analysis Works: Peer-Reviewed Evidence</h3>
-            <p style="color: #9ca3af; line-height: 1.6; margin-bottom: 1.5rem;">
-                The following studies from Frontiers, JMIR, Nature, and MIT validate that voice contains measurable biomarkers for mental and cognitive states:
-            </p>
-        </div>
-
-        <!-- Study Cards -->
-        <div class="papers-list reveal">
-            <div style="background: rgba(20, 20, 35, 0.45); backdrop-filter: blur(12px); border-radius: 20px; padding: 1.5rem; margin-bottom: 1.25rem; border: 1px solid rgba(139, 92, 246, 0.25); transition: all 0.3s ease; font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;" onmouseover="this.style.borderColor='rgba(139, 92, 246, 0.7)'" onmouseout="this.style.borderColor='rgba(139, 92, 246, 0.25)'">
-                <h3 style="font-size: 1.1rem; font-weight: 600; color: #c084fc; margin: 0 0 0.75rem;">Frontiers Study - ML Model Validation</h3>
-                <p style="color: #d1d5db; line-height: 1.5; margin: 0 0 0.75rem; font-style: italic;">"ML models using speech features achieved up to 90% F1 score distinguishing depressed vs healthy adults."</p>
-                <p style="color: #9ca3af; line-height: 1.5; margin: 0;">Voice acoustic features alone can reliably identify depression with very high accuracy.</p>
-            </div>
-
-            <div style="background: rgba(20, 20, 35, 0.45); backdrop-filter: blur(12px); border-radius: 20px; padding: 1.5rem; margin-bottom: 1.25rem; border: 1px solid rgba(139, 92, 246, 0.25); transition: all 0.3s ease; font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;" onmouseover="this.style.borderColor='rgba(139, 92, 246, 0.7)'" onmouseout="this.style.borderColor='rgba(139, 92, 246, 0.25)'">
-                <h3 style="font-size: 1.1rem; font-weight: 600; color: #c084fc; margin: 0 0 0.75rem;">Riad et al., JMIR 2024 - Mobile App Study</h3>
-                <p style="color: #d1d5db; line-height: 1.5; margin: 0 0 0.75rem; font-style: italic;">"Mobile speech-analysis app detected clinical depression (PHQ-9) with AUC ≈ 0.76 and anxiety (GAD-7) with AUC ≈ 0.77."</p>
-                <p style="color: #9ca3af; line-height: 1.5; margin: 0;">Even on mobile devices (not clinical equipment), voice analysis works for both depression and anxiety detection.</p>
-            </div>
-
-            <div style="background: rgba(20, 20, 35, 0.45); backdrop-filter: blur(12px); border-radius: 20px; padding: 1.5rem; margin-bottom: 1.25rem; border: 1px solid rgba(139, 92, 246, 0.25); transition: all 0.3s ease; font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;" onmouseover="this.style.borderColor='rgba(139, 92, 246, 0.7)'" onmouseout="this.style.borderColor='rgba(139, 92, 246, 0.25)'">
-                <h3 style="font-size: 1.1rem; font-weight: 600; color: #c084fc; margin: 0 0 0.75rem;">JMIR AI 2025 - Large-Scale Real-World Trial</h3>
-                <p style="color: #d1d5db; line-height: 1.5; margin: 0 0 0.75rem; font-style: italic;">"In a large-scale real-world trial, voice-AI achieved concordance correlation ∼ 0.54 with PHQ-8 scores and AUC ∼ 0.80."</p>
-                <p style="color: #9ca3af; line-height: 1.5; margin: 0;">Voice analysis works in real-world conditions (not just labs), with thousands of users.</p>
-            </div>
-
-            <div style="background: rgba(20, 20, 35, 0.45); backdrop-filter: blur(12px); border-radius: 20px; padding: 1.5rem; margin-bottom: 1.25rem; border: 1px solid rgba(139, 92, 246, 0.25); transition: all 0.3s ease; font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;" onmouseover="this.style.borderColor='rgba(139, 92, 246, 0.7)'" onmouseout="this.style.borderColor='rgba(139, 92, 246, 0.25)'">
-                <h3 style="font-size: 1.1rem; font-weight: 600; color: #c084fc; margin: 0 0 0.75rem;">Pan et al., Frontiers 2023 - Acoustic Features Study</h3>
-                <p style="color: #d1d5db; line-height: 1.5; margin: 0 0 0.75rem; font-style: italic;">"Voice-based ML models classifying depression vs controls with F1 = 0.9 using acoustic features."</p>
-                <p style="color: #9ca3af; line-height: 1.5; margin: 0;">Specific acoustic features (pitch, jitter, shimmer, MFCCs) are reliable depression biomarkers.</p>
-            </div>
-
-            <div style="background: rgba(20, 20, 35, 0.45); backdrop-filter: blur(12px); border-radius: 20px; padding: 1.5rem; margin-bottom: 1.25rem; border: 1px solid rgba(139, 92, 246, 0.25); transition: all 0.3s ease; font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;" onmouseover="this.style.borderColor='rgba(139, 92, 246, 0.7)'" onmouseout="this.style.borderColor='rgba(139, 92, 246, 0.25)'">
-                <h3 style="font-size: 1.1rem; font-weight: 600; color: #c084fc; margin: 0 0 0.75rem;">Riad et al., JMIR 2024 - Multi-Symptom Detection</h3>
-                <p style="color: #d1d5db; line-height: 1.5; margin: 0 0 0.75rem; font-style: italic;">"Deep model on mobile voice samples to detect depression, anxiety, insomnia, and fatigue, achieving AUC ∼ 0.76-0.78 for depression and anxiety."</p>
-                <p style="color: #9ca3af; line-height: 1.5; margin: 0;">Voice analysis can detect multiple conditions from the same voice sample.</p>
-            </div>
-
-            <div style="background: rgba(20, 20, 35, 0.45); backdrop-filter: blur(12px); border-radius: 20px; padding: 1.5rem; margin-bottom: 1.25rem; border: 1px solid rgba(139, 92, 246, 0.25); transition: all 0.3s ease; font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;" onmouseover="this.style.borderColor='rgba(139, 92, 246, 0.7)'" onmouseout="this.style.borderColor='rgba(139, 92, 246, 0.25)'">
-                <h3 style="font-size: 1.1rem; font-weight: 600; color: #c084fc; margin: 0 0 0.75rem;">Digital Phenotyping in Psychiatry (AI Journal 2025)</h3>
-                <p style="color: #d1d5db; line-height: 1.5; margin: 0 0 0.75rem; font-style: italic;">"Digital phenotyping - including voice analysis - is a next frontier in proactive psychiatry. Up to 80-90% of depression in LMICs goes undetected."</p>
-                <p style="color: #9ca3af; line-height: 1.5; margin: 0;">Voice analysis can help detect what traditional healthcare misses in countries like India.</p>
-            </div>
-
-            <div style="background: rgba(20, 20, 35, 0.45); backdrop-filter: blur(12px); border-radius: 20px; padding: 1.5rem; margin-bottom: 1.25rem; border: 1px solid rgba(139, 92, 246, 0.25); transition: all 0.3s ease; font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;" onmouseover="this.style.borderColor='rgba(139, 92, 246, 0.7)'" onmouseout="this.style.borderColor='rgba(139, 92, 246, 0.25)'">
-                <h3 style="font-size: 1.1rem; font-weight: 600; color: #c084fc; margin: 0 0 0.75rem;">Voice Biomarkers Systematic Review (2025)</h3>
-                <p style="color: #d1d5db; line-height: 1.5; margin: 0 0 0.75rem; font-style: italic;">"AI-based speech and voice analysis distinguished depression from healthy controls with AUCs between 0.71 and 0.93."</p>
-                <p style="color: #9ca3af; line-height: 1.5; margin: 0;">Across 12 different studies, voice analysis consistently works (AUC 0.71-0.93 is good to excellent).</p>
-            </div>
-
-            <div style="background: rgba(20, 20, 35, 0.45); backdrop-filter: blur(12px); border-radius: 20px; padding: 1.5rem; margin-bottom: 1.25rem; border: 1px solid rgba(139, 92, 246, 0.25); transition: all 0.3s ease; font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;" onmouseover="this.style.borderColor='rgba(139, 92, 246, 0.7)'" onmouseout="this.style.borderColor='rgba(139, 92, 246, 0.25)'">
-                <h3 style="font-size: 1.1rem; font-weight: 600; color: #c084fc; margin: 0 0 0.75rem;">MIT CSAIL Speech Biomarkers Project</h3>
-                <p style="color: #d1d5db; line-height: 1.5; margin: 0 0 0.75rem; font-style: italic;">"Audio and text features from clinical speech can predict cognitive impairment and dementia from large longitudinal cohorts."</p>
-                <p style="color: #9ca3af; line-height: 1.5; margin: 0;">MIT's research proves voice analysis works for cognitive decline detection.</p>
-            </div>
-
-            <div style="background: rgba(20, 20, 35, 0.45); backdrop-filter: blur(12px); border-radius: 20px; padding: 1.5rem; margin-bottom: 1.25rem; border: 1px solid rgba(139, 92, 246, 0.25); transition: all 0.3s ease; font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;" onmouseover="this.style.borderColor='rgba(139, 92, 246, 0.7)'" onmouseout="this.style.borderColor='rgba(139, 92, 246, 0.25)'">
-                <h3 style="font-size: 1.1rem; font-weight: 600; color: #c084fc; margin: 0 0 0.75rem;">JMIR 2024 - Early Screening</h3>
-                <p style="color: #d1d5db; line-height: 1.5; margin: 0 0 0.75rem; font-style: italic;">"Speech biomarkers as a noninvasive way to screen the general population and catch symptom escalation earlier."</p>
-                <p style="color: #9ca3af; line-height: 1.5; margin: 0;">Voice analysis can be used for prevention (catching problems before they become severe).</p>
-            </div>
-        </div>
-
-        <!-- Validation Summary Table -->
-        <h2 class="section-header reveal" style="color: #f3f4f6;">Clinical Validation Metrics Summary</h2>
-        <div class="card reveal" style="background: rgba(20, 20, 35, 0.5); backdrop-filter: blur(12px); border: 1px solid rgba(139, 92, 246, 0.25);">
-            <div style="overflow-x: auto;">
-                <table class="summary-table" style="width: 100%; border-collapse: collapse; font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;">
-                    <thead>
-                        <tr style="border-bottom: 2px solid rgba(139, 92, 246, 0.4);">
-                            <th style="color: #c084fc; font-weight: 600; padding: 0.8rem 0.5rem;">Study</th>
-                            <th style="color: #c084fc; font-weight: 600; padding: 0.8rem 0.5rem;">Condition</th>
-                            <th style="color: #c084fc; font-weight: 600; padding: 0.8rem 0.5rem;">Metric</th>
-                            <th style="color: #c084fc; font-weight: 600; padding: 0.8rem 0.5rem;">Score</th>
-                            <th style="color: #c084fc; font-weight: 600; padding: 0.8rem 0.5rem;">Platform</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr style="border-bottom: 1px solid rgba(139, 92, 246, 0.15);">
-                            <td style="color: #e5e7eb; padding: 0.65rem 0.5rem;">Frontiers Study</td>
-                            <td style="color: #d1d5db; padding: 0.65rem 0.5rem;">Depression</td>
-                            <td style="color: #d1d5db; padding: 0.65rem 0.5rem;">F1 Score</td>
-                            <td style="color: #10b981; font-weight: bold; padding: 0.65rem 0.5rem;">0.90</td>
-                            <td style="color: #d1d5db; padding: 0.65rem 0.5rem;">Lab setting</td>
-                        </tr>
-                        <tr style="border-bottom: 1px solid rgba(139, 92, 246, 0.15);">
-                            <td style="color: #e5e7eb; padding: 0.65rem 0.5rem;">Pan et al. 2023</td>
-                            <td style="color: #d1d5db; padding: 0.65rem 0.5rem;">Depression</td>
-                            <td style="color: #d1d5db; padding: 0.65rem 0.5rem;">F1 Score</td>
-                            <td style="color: #10b981; font-weight: bold; padding: 0.65rem 0.5rem;">0.90</td>
-                            <td style="color: #d1d5db; padding: 0.65rem 0.5rem;">Acoustic features</td>
-                        </tr>
-                        <tr style="border-bottom: 1px solid rgba(139, 92, 246, 0.15);">
-                            <td style="color: #e5e7eb; padding: 0.65rem 0.5rem;">Riad et al. 2024</td>
-                            <td style="color: #d1d5db; padding: 0.65rem 0.5rem;">Depression (PHQ-9)</td>
-                            <td style="color: #d1d5db; padding: 0.65rem 0.5rem;">AUC</td>
-                            <td style="color: #10b981; font-weight: bold; padding: 0.65rem 0.5rem;">0.76</td>
-                            <td style="color: #d1d5db; padding: 0.65rem 0.5rem;">Mobile app</td>
-                        </tr>
-                        <tr style="border-bottom: 1px solid rgba(139, 92, 246, 0.15);">
-                            <td style="color: #e5e7eb; padding: 0.65rem 0.5rem;">Riad et al. 2024</td>
-                            <td style="color: #d1d5db; padding: 0.65rem 0.5rem;">Anxiety (GAD-7)</td>
-                            <td style="color: #d1d5db; padding: 0.65rem 0.5rem;">AUC</td>
-                            <td style="color: #10b981; font-weight: bold; padding: 0.65rem 0.5rem;">0.77</td>
-                            <td style="color: #d1d5db; padding: 0.65rem 0.5rem;">Mobile app</td>
-                        </tr>
-                        <tr style="border-bottom: 1px solid rgba(139, 92, 246, 0.15);">
-                            <td style="color: #e5e7eb; padding: 0.65rem 0.5rem;">JMIR AI 2025</td>
-                            <td style="color: #d1d5db; padding: 0.65rem 0.5rem;">Depression (PHQ-8)</td>
-                            <td style="color: #d1d5db; padding: 0.65rem 0.5rem;">AUC</td>
-                            <td style="color: #10b981; font-weight: bold; padding: 0.65rem 0.5rem;">0.80</td>
-                            <td style="color: #d1d5db; padding: 0.65rem 0.5rem;">Real-world</td>
-                        </tr>
-                        <tr style="border-bottom: 1px solid rgba(139, 92, 246, 0.15);">
-                            <td style="color: #e5e7eb; padding: 0.65rem 0.5rem;">Systematic Review 2025</td>
-                            <td style="color: #d1d5db; padding: 0.65rem 0.5rem;">Depression</td>
-                            <td style="color: #d1d5db; padding: 0.65rem 0.5rem;">AUC Range</td>
-                            <td style="color: #10b981; font-weight: bold; padding: 0.65rem 0.5rem;">0.71-0.93</td>
-                            <td style="color: #d1d5db; padding: 0.65rem 0.5rem;">12 studies</td>
-                        </tr>
-                        <tr>
-                            <td style="color: #e5e7eb; padding: 0.65rem 0.5rem;">Riad et al. 2024</td>
-                            <td style="color: #d1d5db; padding: 0.65rem 0.5rem;">Multi-symptom</td>
-                            <td style="color: #d1d5db; padding: 0.65rem 0.5rem;">AUC</td>
-                            <td style="color: #10b981; font-weight: bold; padding: 0.65rem 0.5rem;">0.76-0.78</td>
-                            <td style="color: #d1d5db; padding: 0.65rem 0.5rem;">Mobile deep model</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- Why This Validates Cognivara -->
-        <h2 class="section-header reveal" style="color: #f3f4f6;">Why This Validates Cognivara</h2>
-        <div class="card reveal" style="background: linear-gradient(135deg, rgba(15, 23, 42, 0.75) 0%, rgba(30, 41, 59, 0.45) 100%); border: 1px solid rgba(139, 92, 246, 0.35);">
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem;">
-                <div style="display: flex; align-items: flex-start; gap: 0.5rem;">
-                    <span style="color: #10b981;">✓</span>
-                    <span style="color: #e5e7eb; font-size: 0.9rem;">Acoustic features (pitch, jitter, shimmer, MFCCs) are proven biomarkers</span>
-                </div>
-                <div style="display: flex; align-items: flex-start; gap: 0.5rem;">
-                    <span style="color: #10b981;">✓</span>
-                    <span style="color: #e5e7eb; font-size: 0.9rem;">Mobile devices (not clinical mics) achieve good accuracy (AUC 0.76-0.80)</span>
-                </div>
-                <div style="display: flex; align-items: flex-start; gap: 0.5rem;">
-                    <span style="color: #10b981;">✓</span>
-                    <span style="color: #e5e7eb; font-size: 0.9rem;">Real-world trials outside labs show voice-AI works (AUC 0.80)</span>
-                </div>
-                <div style="display: flex; align-items: flex-start; gap: 0.5rem;">
-                    <span style="color: #10b981;">✓</span>
-                    <span style="color: #e5e7eb; font-size: 0.9rem;">Same voice sample can detect depression, anxiety, insomnia, fatigue</span>
-                </div>
-                <div style="display: flex; align-items: flex-start; gap: 0.5rem;">
-                    <span style="color: #10b981;">✓</span>
-                    <span style="color: #e5e7eb; font-size: 0.9rem;">Voice changes detectable BEFORE severe symptoms appear</span>
-                </div>
-                <div style="display: flex; align-items: flex-start; gap: 0.5rem;">
-                    <span style="color: #10b981;">✓</span>
-                    <span style="color: #e5e7eb; font-size: 0.9rem;">Research from MIT, Frontiers, JMIR, Nature all support this approach</span>
-                </div>
-                <div style="display: flex; align-items: flex-start; gap: 0.5rem;">
-                    <span style="color: #10b981;">✓</span>
-                    <span style="color: #e5e7eb; font-size: 0.9rem;">80-90% of depression in India goes undetected; voice screening can help</span>
-                </div>
-            </div>
-        </div>
-
-        <!-- Disclaimer (MANDATORY) -->
-        <div class="disclaimer reveal" style="background: rgba(20, 20, 35, 0.5); border: 1px solid rgba(245, 158, 11, 0.35);">
-            <div class="disclaimer-title" style="color: #fbbf24;">⚠️ Research Prototype</div>
-            <div class="disclaimer-text" style="color: #e5e7eb;">
-                Cognivara is a research-inspired prototype intended for informational purposes only.
-                It is not a clinically validated diagnostic tool and should not be used for medical decisions.
-            </div>
-        </div>
-    </div>
-  </section>
-
   <!-- ══════════ PROFILE PAGE ══════════ -->
   <section id="profile-page" style="display:none; padding-top:96px; text-align:center;">
     <div class="profile-page-card">
       <div class="profile-avatar-large" id="profile-avatar-large"></div>
       <h2 id="profile-name-large" style="font-family:'Playfair Display',serif; font-size:24px; margin-bottom:4px;"></h2>
-      <p id="profile-email-large" style="color:var(--text-secondary); margin-bottom:20px;"></p>
+      <p id="profile-email-large" style="color:var(--text-secondary); margin-bottom:10px;"></p>
+
+      <div id="profile-account-badges" style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin-bottom:20px;"></div>
+
+      <div id="profile-trend-chart" style="margin-bottom:20px; display:none;">
+        <svg width="100%" height="90" viewBox="0 0 300 90" preserveAspectRatio="xMidYMid meet"
+          id="profile-trend-svg"></svg>
+      </div>
+
       <div style="background:var(--bg); border-radius:10px; padding:16px; text-align:left; margin-bottom:20px;">
         <div style="display:flex; justify-content:space-between; margin-bottom:10px;"><strong>Age Group</strong><span
             id="profile-age-large"></span></div>
-        <div style="display:flex; justify-content:space-between; margin-bottom:10px;"><strong>Monitoring Start
-            Date</strong><span id="profile-start-date"></span></div>
+        <div style="display:flex; justify-content:space-between; margin-bottom:10px;"><strong>Member
+            Since</strong><span id="profile-start-date"></span></div>
         <div style="display:flex; justify-content:space-between; margin-bottom:10px;"><strong>Baseline
-            Established</strong><span id="profile-baseline">Yes</span></div>
-        <div style="display:flex; justify-content:space-between; margin-bottom:10px;"><strong>Total
-            Recordings</strong><span id="profile-total-rec">17</span></div>
+            Status</strong><span id="profile-baseline">Building</span></div>
+        <div style="display:flex; justify-content:space-between; margin-bottom:10px;"><strong>Total Check-Ins</strong><span
+            id="profile-total-rec">0</span></div>
         <div style="display:flex; justify-content:space-between;"><strong>Risk Level</strong><span
             id="profile-risk-large" style="font-weight:700;"></span></div>
       </div>
 
       <div style="text-align:left; margin-bottom:20px;">
-        <h3 style="font-size:16px; margin-bottom:12px; color:var(--navy);">Recording History</h3>
+        <h3 style="font-size:16px; margin-bottom:12px; color:var(--navy);">Check-In History</h3>
         <table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:16px;">
           <tr style="border-bottom:2px solid var(--border); color:var(--text-muted); text-align:left;">
             <th style="padding:8px 4px;">Date</th>
@@ -766,33 +630,19 @@
           </tr>
           <tbody id="profile-history-body">
             <tr style="border-bottom:1px solid var(--border-soft);">
-              <td colspan="4" style="padding:10px 4px; color:var(--text-muted);">No sessions yet. Complete recordings to populate history.</td>
+              <td colspan="4" style="padding:10px 4px; color:var(--text-muted);">No sessions yet. Complete a check-in to populate history.</td>
             </tr>
           </tbody>
         </table>
 
         <div id="profile-weekly-summary"
-          style="background:linear-gradient(135deg,rgba(8,18,32,0.92),rgba(14,30,52,0.92)); border:1px solid rgba(59,130,246,0.32); border-radius:10px; padding:14px; margin-bottom:16px; font-size:13px; color:var(--text-secondary);">
+          style="background:linear-gradient(135deg,rgba(8,18,32,0.92),rgba(14,30,52,0.92)); border:1px solid rgba(59,130,246,0.32); border-radius:10px; padding:14px; font-size:13px; color:var(--text-secondary);">
           <strong id="profile-weekly-title" style="color:var(--blue); display:block; margin-bottom:4px;">Weekly AI Summary</strong>
           <span id="profile-weekly-text">Weekly summary will appear after enough sessions are recorded.</span>
         </div>
-
-        <button class="btn-secondary" style="width:100%; justify-content:center; margin-bottom:16px;"
-          onclick="alert('Exporting PDF...')">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-            style="margin-right:6px;">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-            <polyline points="7 10 12 15 17 10" />
-            <line x1="12" y1="15" x2="12" y2="3" />
-          </svg>
-          Export Cognitive Report (PDF)
-        </button>
       </div>
-      <div style="display:flex; justify-content:space-between;"><strong>Risk Level</strong><span id="profile-risk-large"
-          style="font-weight:700;"></span></div>
     </div>
     <button class="btn-primary" onclick="goBack()">Back to Dashboard</button>
-    </div>
   </section>
 
   <!-- ══════════ SETTINGS PAGE ══════════ -->
@@ -801,7 +651,7 @@
       <h2 style="font-family:'Playfair Display',serif; margin-bottom:24px;">Account Settings</h2>
       <div class="settings-section">
         <label>Name<input type="text" id="settings-name"></label>
-        <label>Email<input type="email" id="settings-email"></label>
+        <label>Email<input type="email" id="settings-email" readonly title="Email can't be changed here"></label>
         <label>Password<input type="password" id="settings-password" placeholder="••••••••"></label>
         <div style="display:flex; gap:10px;">
           <label style="flex:1;">Age<input type="number" id="settings-age"></label>
@@ -959,48 +809,35 @@
   </div>
 
   <footer>
-    <div class="footer-content">
-      <div class="footer-brand">
-        <div class="footer-brand-icon">
-          <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="url(#brain-grad-footer)"
-            stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-            <defs>
-              <linearGradient id="brain-grad-footer" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stop-color="#14f1d9" />
-                <stop offset="100%" stop-color="#3b82f6" />
-              </linearGradient>
-            </defs>
-            <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"></path>
-            <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"></path>
-            <path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"></path>
-            <path d="M17.599 6.5a3 3 0 0 0 .399-1.375"></path>
-            <path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"></path>
-            <path d="M3.477 10.896a4 4 0 0 1 .585-.396"></path>
-            <path d="M19.938 10.5a4 4 0 0 1 .585.396"></path>
-            <path d="M6 18a4 4 0 0 1-1.967-.516"></path>
-            <path d="M19.967 17.484A4 4 0 0 1 18 18"></path>
-          </svg>
-        </div>
-        COGNIVARA
+    <div class="footer-brand">
+      <div class="footer-brand-icon">
+        <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="url(#brain-grad-footer)"
+          stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <defs>
+            <linearGradient id="brain-grad-footer" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#14f1d9" />
+              <stop offset="100%" stop-color="#3b82f6" />
+            </linearGradient>
+          </defs>
+          <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"></path>
+          <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"></path>
+          <path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"></path>
+          <path d="M17.599 6.5a3 3 0 0 0 .399-1.375"></path>
+          <path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"></path>
+          <path d="M3.477 10.896a4 4 0 0 1 .585-.396"></path>
+          <path d="M19.938 10.5a4 4 0 0 1 .585.396"></path>
+          <path d="M6 18a4 4 0 0 1-1.967-.516"></path>
+          <path d="M19.967 17.484A4 4 0 0 1 18 18"></path>
+        </svg>
       </div>
-      
-      <div class="footer-links">
-        <a href="#" onclick="showPrivacyPolicy()">Privacy Policy</a>
-        <a href="#" onclick="showTermsOfService()">Terms of Service</a>
-        <a href="#" onclick="showContact()">Contact</a>
-        <a href="#" onclick="showScientificFoundation()">Research</a>
-      </div>
-      
-      <div class="footer-note">
-        For investigational use only. Not FDA approved. Demo build for academic presentation.
-      </div>
+      COGNIVARA
     </div>
+    <div class="footer-note">For investigational use only. Not FDA approved. Demo build for academic presentation.</div>
   </footer>
 
   
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-  <script src="scripts/component-loader.js"></script>
-  <script src="scripts/app.js?v=2026-04-16-7"></script>
+  <script src="scripts/app.js"></script>
   <script src="scripts/background.js"></script>
   
 </body>

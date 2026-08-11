@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { postWithRetry } = require('./http_retry');
 
 const HF_ROUTER_BASE = 'https://router.huggingface.co/hf-inference/models';
 const WORD_REGEX = /[a-z']+/g;
@@ -7,10 +8,6 @@ const FILLER_SET = new Set(['um', 'uh', 'like', 'you', 'know', 'actually', 'basi
 
 function clamp(value, min = 0, max = 100) {
   return Math.max(min, Math.min(max, value));
-}
-
-function delay(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function normalizeClassificationOutput(raw) {
@@ -152,18 +149,6 @@ function buildParsedFromSignals(text, emotionPred = [], sentimentPred = [], mode
   };
 }
 
-function isRetryable(err) {
-  const status = err?.response?.status;
-  if ([408, 409, 425, 429, 500, 502, 503, 504].includes(status)) return true;
-  const msg = String(err?.message || '').toLowerCase();
-  return (
-    msg.includes('timeout') ||
-    msg.includes('econnreset') ||
-    msg.includes('socket hang up') ||
-    msg.includes('network')
-  );
-}
-
 async function hfPostJson({ apiKey, model, payload, timeout = 120000, retries = 2 }) {
   const url = `${HF_ROUTER_BASE}/${encodeURIComponent(model)}`;
   const headers = {
@@ -171,20 +156,10 @@ async function hfPostJson({ apiKey, model, payload, timeout = 120000, retries = 
     'Content-Type': 'application/json',
     Accept: 'application/json'
   };
-  let lastErr = null;
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      return await axios.post(url, payload, { headers, timeout });
-    } catch (err) {
-      lastErr = err;
-      if (attempt === retries || !isRetryable(err)) throw err;
-      await delay(350 * (attempt + 1));
-    }
-  }
-  throw lastErr;
+  return postWithRetry(axios, url, payload, { headers, timeout }, { retries });
 }
 
-async function transcribeWithHF({ apiKey, model, fileBuffer, contentType }) {
+async function transcribeWithHF({ apiKey, model, fileBuffer, contentType, retries = 2 }) {
   const url = `${HF_ROUTER_BASE}/${encodeURIComponent(model)}`;
   const headers = {
     Authorization: `Bearer ${apiKey}`,
@@ -192,11 +167,13 @@ async function transcribeWithHF({ apiKey, model, fileBuffer, contentType }) {
     Accept: 'application/json'
   };
 
-  const resp = await axios.post(url, fileBuffer, {
-    headers,
-    responseType: 'json',
-    timeout: 180000
-  });
+  const resp = await postWithRetry(
+    axios,
+    url,
+    fileBuffer,
+    { headers, responseType: 'json', timeout: 180000 },
+    { retries }
+  );
 
   const data = resp.data;
   const transcription = typeof data === 'string' ? data : data?.text || null;

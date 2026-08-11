@@ -4,22 +4,11 @@ python-multipart
 python-dotenv
 sqlalchemy
 psycopg[binary]
-psycopg2-binary
-pg8000
-alembic
-python-jose[cryptography]
-passlib[bcrypt]
-boto3
-celery[redis]
-redis
-sentry-sdk
 librosa
 numpy
 scipy
 nltk
-joblib
-scikit-learn
-xgboost
-
-# Optional / tooling
-dvc
+google-auth
+requests
+sentry-sdk
+boto3

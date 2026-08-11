@@ -1,18 +1,15 @@
 # Frontend Structure
 
-Current production frontend files:
+Production frontend files (this is the whole runtime frontend — no other files are loaded):
 
 - `frontend/index.html`: full page markup
 - `frontend/styles/main.css`: consolidated styling
 - `frontend/scripts/app.js`: main application logic
 - `frontend/scripts/background.js`: Three.js background animation
 
-Additional frontend assets retained in:
+`frontend/` previously also carried a second, unused componentized layout (`frontend/components/*.html` plus `api.js`, `recording.js`, `ui.js`, `component-loader.js`). Nothing in `index.html` loaded `component-loader.js`, so none of it ever ran. It has been moved to archive for reference:
 
-- `frontend/scripts/` (`api.js`, `recording.js`, `ui.js`, `component-loader.js`)
-- `frontend/components/` (legacy component partials)
-
-Legacy source snapshots are archived at:
-
+- `archive/frontend/components/` (unused component partials)
+- `archive/frontend/scripts/` (`api.js`, `recording.js`, `ui.js`, `component-loader.js`)
 - `archive/frontend/test_1.html`
 - `archive/frontend/new_frontend.txt`

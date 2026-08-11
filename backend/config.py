@@ -17,49 +17,19 @@ def _env_bool(name: str, default: bool = False) -> bool:
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
 # ── Database ──────────────────────────────────────────────
-# Default to SQLite when DATABASE_URL is not configured. Render deployments should
-# still use the managed Postgres DATABASE_URL when present, but the service must
-# be able to boot so miswired env vars do not crash the process at import time.
+# Default: SQLite locally, but require DATABASE_URL on Render to avoid silent fallback.
 _database_url = os.getenv('DATABASE_URL', '').strip()
 if _database_url:
     DATABASE_URL = _database_url
 else:
+    if os.getenv('RENDER') == 'true':
+        raise RuntimeError('DATABASE_URL is required on Render. Connect your Postgres instance.')
     DATABASE_URL = 'sqlite:///' + os.path.join(os.path.dirname(__file__), 'cognivara.db')
 
-def _resolve_postgres_dialect(url: str) -> str:
-    known_prefixes = (
-        'postgres://',
-        'postgresql://',
-        'postgresql+psycopg://',
-        'postgresql+psycopg2://',
-    )
-    if not any(url.startswith(prefix) for prefix in known_prefixes):
-        return url
-
-    suffix = url.split('://', 1)[1]
-    try:
-        import psycopg  # noqa: F401
-        return f'postgresql+psycopg://{suffix}'
-    except Exception:
-        pass
-
-    try:
-        import psycopg2  # noqa: F401
-        return f'postgresql+psycopg2://{suffix}'
-    except Exception:
-        pass
-
-    try:
-        import pg8000  # noqa: F401
-        return f'postgresql+pg8000://{suffix}'
-    except Exception:
-        pass
-
-    # Fall back to SQLAlchemy's default postgres URL so it can pick the best
-    # available PostgreSQL DBAPI in the environment.
-    return f'postgresql://{suffix}'
-
-DATABASE_URL = _resolve_postgres_dialect(DATABASE_URL)
+if DATABASE_URL.startswith('postgres://'):
+    DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql+psycopg://', 1)
+elif DATABASE_URL.startswith('postgresql://'):
+    DATABASE_URL = DATABASE_URL.replace('postgresql://', 'postgresql+psycopg://', 1)
 
 # ── Server ────────────────────────────────────────────────
 FASTAPI_PORT = int(os.getenv('FASTAPI_PORT', '8000'))
@@ -71,17 +41,47 @@ CORS_ORIGINS = os.getenv(
 # ── Analysis Tuning ──────────────────────────────────────
 BASELINE_SESSION_COUNT = int(os.getenv('BASELINE_SESSION_COUNT', '3'))
 DRIFT_ROLLING_WINDOW = int(os.getenv('DRIFT_ROLLING_WINDOW', '3'))
-DRIFT_Z_THRESHOLD = float(os.getenv('DRIFT_Z_THRESHOLD', '1.5'))
+# NOTE: services/baseline.py's compute_z_scores tanh-compresses + shrinks (_Z_TANH_SCALE * _Z_SHRINK)
+# so |z| asymptotically maxes out at 1.5 * 0.90 = 1.35, no matter how extreme the raw deviation is.
+# A threshold >= 1.35 (the old default of 1.5) can mathematically never be crossed, which silently
+# disabled all drift flagging. Keep this below 1.35 with real headroom for genuine deviations.
+DRIFT_Z_THRESHOLD = float(os.getenv('DRIFT_Z_THRESHOLD', '1.0'))
+
+# ── Auth ──────────────────────────────────────────────────
+AUTH_TOKEN_TTL_DAYS = int(os.getenv('AUTH_TOKEN_TTL_DAYS', '30'))
+GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID', '').strip()
+
+# ── Error tracking (Sentry) ───────────────────────────────
+SENTRY_DSN = os.getenv('SENTRY_DSN', '').strip()
+ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')
+
+# ── Email (Resend) ────────────────────────────────────────
+RESEND_API_KEY = os.getenv('RESEND_API_KEY', '').strip()
+RESEND_FROM_EMAIL = os.getenv('RESEND_FROM_EMAIL', 'onboarding@resend.dev')
+FRONTEND_BASE_URL = os.getenv('FRONTEND_BASE_URL', 'http://localhost:3000')
+EMAIL_VERIFICATION_TTL_HOURS = int(os.getenv('EMAIL_VERIFICATION_TTL_HOURS', '24'))
 
 # ── Audio ─────────────────────────────────────────────────
 AUDIO_UPLOAD_DIR = os.path.join(os.path.dirname(__file__), 'uploads')
 os.makedirs(AUDIO_UPLOAD_DIR, exist_ok=True)
+
+# Object storage for raw recordings (S3-compatible: real AWS S3, Cloudflare R2, Backblaze
+# B2, MinIO, ...). Falls back to local disk when unset — matches every other optional
+# integration in this codebase. Local disk is fine for dev, but on a host with an ephemeral
+# filesystem (e.g. Render's free tier) local files are lost on every redeploy/restart, so
+# this should be configured before relying on raw audio surviving in production.
+S3_BUCKET = os.getenv('S3_BUCKET', '').strip()
+S3_ENDPOINT_URL = os.getenv('S3_ENDPOINT_URL', '').strip()  # empty = real AWS S3
+S3_ACCESS_KEY_ID = os.getenv('S3_ACCESS_KEY_ID', '').strip()
+S3_SECRET_ACCESS_KEY = os.getenv('S3_SECRET_ACCESS_KEY', '').strip()
+S3_REGION = os.getenv('S3_REGION', 'us-east-1').strip()  # R2 users: set this to "auto"
 
 # ── CSI Weights (equal by default) ────────────────────────
 CSI_WEIGHTS = {
     'mfcc_variance_avg': 0.10,
     'pitch_var': 0.07,
     'jitter_local': 0.06,
+    'hnr_mean': 0.07,
     'shimmer_local': 0.06,
     'spectral_centroid_mean': 0.05,
     'energy_var': 0.06,
@@ -104,5 +104,5 @@ CSI_WEIGHTS = {
 # Optional performance mode for constrained cloud instances.
 FAST_ANALYSIS_MODE = _env_bool(
     'FAST_ANALYSIS_MODE',
-    default=True,
+    default=False,
 )

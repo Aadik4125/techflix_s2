@@ -57,14 +57,13 @@
     // ══════════════════════════════════════════════
     let userAnalysis = null;
     let allTranscripts = [];   // array of {session, text}
-    let currentRunSessionAnalytics = {}; // keyed by session id, from /api/upload responses
+    let currentRunSessionAnalytics = {}; // keyed by session id, from /api/upload (or demo-placeholder) responses
+    let demoFeatureAccumulator = {}; // keyed by session id, raw feature dicts from /api/demo/extract (demo mode only)
     let currentComparePatient = 'A';
     let backendStatusBase = null;
     let backendStatusBusy = false;
     let backendProbeFailures = 0;
     let backendLastOkAt = 0;
-    const PRODUCTION_BACKEND_URL = 'https://cognivara-backend-service.onrender.com';
-    const PRODUCTION_NODE_URL = 'https://cognivara-node.onrender.com';
 
     function getApiBase() {
       if (window.COGNIVARA_API_BASE && String(window.COGNIVARA_API_BASE).trim()) {
@@ -72,7 +71,7 @@
       }
       if (window.location.protocol === 'file:') return 'http://localhost:8000';
       if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') return 'http://localhost:8000';
-      return PRODUCTION_BACKEND_URL;
+      return window.location.origin;
     }
 
     function getApiCandidates() {
@@ -91,7 +90,6 @@
         return [String(preferred).replace(/\/$/, '')];
       }
       const set = new Set([preferred, 'http://localhost:8000', 'http://127.0.0.1:8000']);
-      if (PRODUCTION_BACKEND_URL) set.add(PRODUCTION_BACKEND_URL);
       return Array.from(set).filter(Boolean).map(v => String(v).replace(/\/$/, ''));
     }
 
@@ -103,6 +101,11 @@
       const u = getStoredUser();
       const parsed = Number(u.userId);
       return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    }
+
+    function authHeaders() {
+      const token = localStorage.getItem('cognivara_token');
+      return token ? { Authorization: `Bearer ${token}` } : {};
     }
 
     function backendHostLabel(base) {
@@ -131,7 +134,7 @@
     async function probeBackend(base) {
       try {
         const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 25000);
+        const t = setTimeout(() => ctrl.abort(), 10000);
         const resp = await fetch(`${base}/api/health`, { method: 'GET', signal: ctrl.signal });
         clearTimeout(t);
         return resp.ok;
@@ -182,7 +185,7 @@
         }
         backendProbeFailures += 1;
         const recentOk = backendLastOkAt > 0 && (Date.now() - backendLastOkAt) < (10 * 60 * 1000);
-        if (backendProbeFailures >= 8) {
+        if (backendProbeFailures >= 8 || (force && !recentOk)) {
           setBackendStatus('offline', 'Backend: offline', 'FastAPI backend is not reachable');
         } else if (backendStatusBase || recentOk) {
           setBackendStatus(
@@ -191,7 +194,7 @@
             'Backend is slow/busy. Retrying health checks.'
           );
         } else {
-          setBackendStatus('checking', 'Backend: waking up', 'Backend response delayed; retrying');
+          setBackendStatus('checking', 'Backend: checking', 'Backend response delayed; retrying');
         }
         return false;
       } finally {
@@ -208,27 +211,6 @@
       const clampedPull = Math.max(0, Math.min(0.8, Number(pull) || 0));
       const base = clampScore(v);
       return clampScore(Math.round(50 + (base - 50) * (1 - clampedPull)));
-    }
-
-    function riskFromCsi(csi, drift = 0, options = {}) {
-      const csiScore = clampScore(csi ?? 50);
-      const driftScore = clampScore(drift);
-      const driftWeight = Number.isFinite(Number(options.driftWeight)) ? Number(options.driftWeight) : 0.12;
-      const pull = Number.isFinite(Number(options.pull)) ? Number(options.pull) : 0.12;
-      const rawRisk = clampScore(Math.round((100 - csiScore) * (1 - driftWeight) + driftScore * driftWeight));
-      return soberizeScore(rawRisk, pull);
-    }
-
-    function trendAdjustedLatestRisk(riskArr) {
-      const values = (riskArr || []).map(clampScore).filter(v => Number.isFinite(v));
-      if (!values.length) return 50;
-      const latest = values[values.length - 1];
-      if (values.length < 3) return latest;
-
-      const previous = values.slice(0, -1);
-      const priorMean = previous.reduce((a, b) => a + b, 0) / Math.max(previous.length, 1);
-      const trendAdjustment = Math.max(0, Math.min(4, (latest - priorMean) * 0.18));
-      return clampScore(Math.round(latest + trendAdjustment));
     }
 
     function localHeuristicAnalysis(text) {
@@ -298,183 +280,6 @@
       };
     }
 
-    function getTranscriptForSession(transcripts, sessionId) {
-      const match = (transcripts || []).find(t => Number(t.session) === Number(sessionId));
-      return String(match?.text || '').trim();
-    }
-
-    function isPlaceholderTranscript(text) {
-      const lower = String(text || '').toLowerCase();
-      return (
-        !lower.trim() ||
-        lower.includes('no speech recognized') ||
-        lower.includes('waiting for whisper') ||
-        lower.includes('transcript unavailable') ||
-        lower.includes('transcript pending') ||
-        lower.includes('still processing') ||
-        lower.includes('speech sample recorded')
-      );
-    }
-
-    function spokenContentStats(text) {
-      const raw = String(text || '').trim();
-      const words = raw.toLowerCase().match(/[a-z']+/g) || [];
-      const sentences = raw.split(/[.!?]+/).map(s => s.trim()).filter(Boolean);
-      const stop = new Set([
-        'a', 'an', 'and', 'are', 'as', 'at', 'be', 'been', 'but', 'by', 'for', 'from',
-        'had', 'has', 'have', 'he', 'her', 'his', 'i', 'in', 'is', 'it', 'its', 'me',
-        'my', 'of', 'on', 'or', 'our', 'she', 'so', 'that', 'the', 'their', 'them',
-        'then', 'there', 'they', 'this', 'to', 'was', 'we', 'were', 'with', 'you',
-        'your', 'about', 'just', 'really', 'today'
-      ]);
-      const filler = new Set(['um', 'uh', 'like', 'actually', 'basically', 'well', 'right', 'you', 'know']);
-      const negative = new Set([
-        'sad', 'angry', 'upset', 'worried', 'worry', 'stress', 'stressed', 'stressful',
-        'tired', 'exhausted', 'drained', 'fatigued', 'confused', 'hard', 'difficult',
-        'bad', 'terrible', 'awful', 'anxious', 'anxiety', 'panic', 'scared', 'afraid',
-        'low', 'down', 'depressed', 'hopeless', 'overwhelmed', 'frustrated', 'irritated',
-        'nervous', 'unwell', 'sick', 'pain', 'pressure', 'struggle', 'struggling'
-      ]);
-      const positive = new Set([
-        'happy', 'good', 'great', 'calm', 'fine', 'better', 'excited', 'relaxed',
-        'nice', 'easy', 'okay', 'ok', 'well', 'focused', 'stable', 'confident',
-        'peaceful', 'positive', 'energetic', 'rested'
-      ]);
-      const negators = new Set(['not', "n't", 'no', 'never', 'hardly', 'barely', 'without']);
-      const intensifiers = new Set(['very', 'really', 'so', 'too', 'extremely', 'quite', 'still']);
-
-      const fillerCount = words.filter(w => filler.has(w)).length;
-      const repeatCount = words.slice(1).reduce((n, w, i) => n + (w === words[i] ? 1 : 0), 0);
-      const unique = new Set(words);
-      const keywordCounts = new Map();
-      words.forEach(w => {
-        if (w.length < 4 || stop.has(w) || filler.has(w)) return;
-        keywordCounts.set(w, (keywordCounts.get(w) || 0) + 1);
-      });
-      const keywords = [...keywordCounts.entries()]
-        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-        .slice(0, 4)
-        .map(([word]) => word);
-      const firstSentence = sentences[0] || raw;
-      const quote = firstSentence.length > 120 ? `${firstSentence.slice(0, 117)}...` : firstSentence;
-      let positiveScore = 0;
-      let negativeScore = 0;
-      words.forEach((word, idx) => {
-        const windowStart = Math.max(0, idx - 3);
-        const context = words.slice(windowStart, idx);
-        const isNegated = context.some(w => negators.has(w));
-        const intensity = context.some(w => intensifiers.has(w)) ? 1.35 : 1;
-        if (negative.has(word)) {
-          if (isNegated) positiveScore += 0.75 * intensity;
-          else negativeScore += 1 * intensity;
-        }
-        if (positive.has(word)) {
-          if (isNegated) negativeScore += 1 * intensity;
-          else positiveScore += 1 * intensity;
-        }
-      });
-      const sentimentBalance = positiveScore - negativeScore;
-      const toneRisk = clampScore(
-        38 +
-        negativeScore * 16 -
-        positiveScore * 7 +
-        Math.max(0, 10 - words.length) * 0.8
-      );
-
-      return {
-        raw,
-        words,
-        wordCount: words.length,
-        sentenceCount: sentences.length || (raw ? 1 : 0),
-        avgSentenceLen: words.length / Math.max(1, sentences.length || 1),
-        lexicalDiversity: words.length ? unique.size / words.length : 0,
-        fillerRatio: words.length ? fillerCount / words.length : 0,
-        repeatRatio: words.length ? repeatCount / words.length : 0,
-        fillerCount,
-        repeatCount,
-        keywords,
-        quote,
-        positiveScore: Number(positiveScore.toFixed(2)),
-        negativeScore: Number(negativeScore.toFixed(2)),
-        sentimentBalance: Number(sentimentBalance.toFixed(2)),
-        toneRisk,
-        tone: negativeScore > 0 && negativeScore >= positiveScore
-          ? 'strained'
-          : positiveScore >= negativeScore + 1
-            ? 'positive'
-            : 'neutral',
-      };
-    }
-
-    function transcriptToneRisk(text) {
-      if (isPlaceholderTranscript(text)) return { risk: null, tone: 'unknown', confidence: 0 };
-      const stats = spokenContentStats(text);
-      const confidence = Math.max(0.25, Math.min(1, stats.wordCount / 24));
-      return {
-        risk: stats.toneRisk,
-        tone: stats.tone,
-        confidence,
-        negativeScore: stats.negativeScore,
-        positiveScore: stats.positiveScore,
-      };
-    }
-
-    function blendRiskWithTranscript(baseRisk, transcriptText) {
-      const base = clampScore(baseRisk);
-      const tone = transcriptToneRisk(transcriptText);
-      if (tone.risk === null || tone.confidence <= 0) return base;
-      const weight = Math.max(0.30, Math.min(0.60, 0.30 + tone.confidence * 0.25));
-      const blended = Math.round(base * (1 - weight) + tone.risk * weight);
-      if (tone.tone === 'strained') {
-        const floor = tone.risk >= 65 ? 50 : tone.risk >= 45 ? 45 : base;
-        return clampScore(Math.max(base, blended, floor));
-      }
-      if (tone.tone === 'positive' && tone.risk <= 35) {
-        return clampScore(Math.min(base, blended));
-      }
-      return clampScore(Math.max(base, blended));
-    }
-
-    function buildTranscriptGroundedInsight(sessionId, text, scores = {}, sourceLabel = 'analysis') {
-      if (isPlaceholderTranscript(text)) {
-        return `Session ${sessionId}: transcript was not available yet, so the interpretation relies on ${sourceLabel} audio and CSI markers. Re-run after transcription finishes for content-specific wording.`;
-      }
-
-      const stats = spokenContentStats(text);
-      const topicText = stats.keywords.length
-        ? `Main spoken themes: ${stats.keywords.join(', ')}.`
-        : 'Main spoken themes were too sparse to identify reliably.';
-      const fluencyText = stats.fillerRatio >= 0.08
-        ? `Frequent fillers (${stats.fillerCount}/${stats.wordCount} words) suggest hesitation pressure.`
-        : stats.repeatRatio >= 0.05
-          ? `Repeated adjacent words (${stats.repeatCount}) suggest some restart behavior.`
-          : 'Filler and immediate repetition levels were low.';
-      const structureText = stats.wordCount < 12
-        ? 'Because the response was very short, this session has low content confidence.'
-        : stats.lexicalDiversity >= 0.72 && stats.avgSentenceLen >= 8
-          ? 'The response used varied vocabulary with enough sentence length for a more content-grounded read.'
-          : stats.lexicalDiversity < 0.48
-            ? 'Vocabulary variety was limited, which can lower the linguistic-complexity estimate.'
-            : 'Sentence structure was understandable, with moderate vocabulary variety.';
-      const scoreText = Number.isFinite(Number(scores.risk))
-        ? `Session risk estimate: ${clampScore(scores.risk)}/100, CSI: ${clampScore(scores.csi ?? scores.cog ?? 50)}/100.`
-        : '';
-
-      return `Session ${sessionId}: based on what was said - "${stats.quote}". ${topicText} Tone appears ${stats.tone}. ${structureText} ${fluencyText} ${scoreText}`.trim();
-    }
-
-    function buildExplainability(transcripts, sessions) {
-      const texts = (transcripts || []).map(t => String(t.text || '')).filter(t => !isPlaceholderTranscript(t));
-      const stats = spokenContentStats(texts.join(' '));
-      const avgRisk = Math.round((sessions || []).reduce((a, s) => a + (Number(s.risk) || 0), 0) / Math.max(1, (sessions || []).length));
-      const topics = stats.keywords.length ? stats.keywords.join(', ') : 'not enough transcript content';
-      return [
-        `Spoken content themes detected: ${topics}.`,
-        `Language signal: ${stats.wordCount} words, ${(stats.lexicalDiversity * 100).toFixed(1)}% lexical diversity, ${(stats.fillerRatio * 100).toFixed(1)}% fillers.`,
-        `Composite risk settled at ${avgRisk}/100 after combining transcript-derived fluency with backend biomarkers.`
-      ];
-    }
-
     function buildAnalysisFromParsedSessions(perSession, transcripts, sourceLabel) {
       const emoArr = perSession.map(p => clampScore(p.emo));
       const cogArr = perSession.map(p => clampScore(p.cog));
@@ -483,7 +288,18 @@
       const linArr = perSession.map(p => clampScore(p.lin));
       const riskArr = perSession.map(p => clampScore(p.risk));
 
-      const riskScore = trendAdjustedLatestRisk(riskArr);
+      const riskMean = riskArr.reduce((a, b) => a + b, 0) / Math.max(riskArr.length, 1);
+      const sortedRisk = [...riskArr].sort((a, b) => a - b);
+      const mid = Math.floor(sortedRisk.length / 2);
+      const riskMedian = sortedRisk.length % 2
+        ? sortedRisk[mid]
+        : Math.round((sortedRisk[mid - 1] + sortedRisk[mid]) / 2);
+      const spread = (sortedRisk[sortedRisk.length - 1] ?? 50) - (sortedRisk[0] ?? 50);
+      let riskScore = Math.round(riskMedian * 0.60 + riskMean * 0.40);
+      // Damp high volatility across sessions to keep scoring fair and stable.
+      const neutralPull = Math.max(0, Math.min(0.48, (spread - 10) / 70));
+      riskScore = clampScore(Math.round(riskScore * (1 - neutralPull) + 50 * neutralPull));
+      riskScore = soberizeScore(riskScore, 0.22);
 
       let riskLabel, riskClass, riskColor, gradStop1, gradStop2, deltaText, deltaArrow;
       if (riskScore < 45) {
@@ -500,62 +316,61 @@
         deltaText = `Elevated concern`; deltaArrow = 'up';
       }
 
-      const emoIdx = emoArr[emoArr.length - 1] ?? 50;
-      const csiScore = csiArr[csiArr.length - 1] ?? 50;
+      const emoIdx = Math.round(emoArr.reduce((a, b) => a + b, 0) / Math.max(emoArr.length, 1));
+      const csiScore = Math.round(csiArr.reduce((a, b) => a + b, 0) / Math.max(csiArr.length, 1));
       const cogIdx = csiScore;
-      const fluIdx = linArr[linArr.length - 1] ?? 50;
+      const fluIdx = Math.round(linArr.reduce((a, b) => a + b, 0) / Math.max(linArr.length, 1));
 
       return {
         riskScore, riskLabel, riskClass, riskColor, gradStop1, gradStop2,
         deltaText, deltaArrow,
         description: `Your speech biomarkers have been analyzed across ${transcripts.length} sessions (${sourceLabel}).`,
         analysisSource: sourceLabel,
-        insight: perSession.map((p) => (
-          p.insight ||
-          buildTranscriptGroundedInsight(
-            p.session,
-            getTranscriptForSession(transcripts, p.session),
-            p,
-            sourceLabel
-          )
-        )).filter(Boolean).join('\n---\n') || 'Analysis complete.',
+        insight: perSession.map(p => p.insight || '').filter(Boolean).join('\n---\n') || 'Analysis complete.',
         insightMeta: `Generated today · ${sourceLabel} · Not a clinical diagnosis`,
         csiScore,
         indices: { emo: emoIdx, cog: cogIdx, flu: fluIdx },
         indexColors: { emo: riskColor, cog: riskColor, flu: riskColor },
         emo: emoArr, csi: csiArr, cog: cogArr, hes: hesArr, lin: linArr, risk: riskArr,
-        transcripts, sessions: perSession,
-        explain: buildExplainability(transcripts, perSession)
+        transcripts, sessions: perSession
       };
     }
 
     async function computeUserAnalysis(transcripts) {
-      const analysisTranscripts = transcripts.map((t, i) => {
-        const sessionId = Number(t?.session) || (i + 1);
-        const rawText = String(t?.text || '').trim();
-        const lower = rawText.toLowerCase();
-        const isPlaceholder = (
-          !rawText ||
+      function isInvalidTranscript(t) {
+        if (!t || !t.text || !t.text.trim()) return true;
+        const sessionId = Number(t.session);
+        const hasBackendUpload = Number.isFinite(sessionId) && sessionId > 0 && !!currentRunSessionAnalytics[sessionId];
+        // If backend upload succeeded for this session, it should not be treated as skipped
+        // even when transcript text is still pending/unavailable.
+        if (hasBackendUpload) return false;
+        const lower = t.text.toLowerCase();
+        return (
           lower.includes('no speech recognized') ||
           lower.includes('waiting for whisper') ||
-          lower.includes('transcript unavailable') ||
-          lower.includes('transcript pending') ||
-          lower.includes('still processing')
+          lower.includes('transcript unavailable')
         );
-        return {
-          session: sessionId,
-          text: isPlaceholder
-            ? `Session ${sessionId} speech sample recorded. Transcript still processing; using audio-derived backend markers.`
-            : rawText
-        };
-      });
+      }
 
-      // Prefer current-run upload results over global dashboard history.
+      const invalid = transcripts.filter(isInvalidTranscript);
+      const skippedSessions = invalid.map(t => t.session);
+      if (skippedSessions.length) showTranscriptWarning(skippedSessions);
+      const validTranscripts = transcripts.filter(t => !isInvalidTranscript(t));
+      const analysisTranscripts = validTranscripts.length
+        ? validTranscripts
+        : transcripts.map((t, i) => ({
+          session: t.session || (i + 1),
+          text: `Session ${t.session || (i + 1)} speech sample recorded. Transcript unavailable; using audio-derived backend markers.`
+        }));
+
+      // Demo mode has no history to fall back on — its 3 in-sitting recordings ARE the whole
+      // picture, so prefer current-run results. Real check-ins always show the full accumulated
+      // dashboard history instead (see the fetch branch below), not just today's single point.
       const runSessionIds = analysisTranscripts.map(t => Number(t.session)).filter(n => Number.isFinite(n) && n > 0);
       const runUploads = runSessionIds
         .map(id => ({ id, data: currentRunSessionAnalytics[id] }))
         .filter(x => !!x.data);
-      if (runUploads.length > 0) {
+      if (DEMO_MODE && runUploads.length > 0) {
         const byId = new Map(runUploads.map(x => [x.id, x.data]));
         let prevRisk = null;
         const perSession = runSessionIds.map((id) => {
@@ -564,8 +379,7 @@
             const local = localHeuristicAnalysis(
               analysisTranscripts.find(t => Number(t.session) === id)?.text || ''
             );
-            const transcriptText = getTranscriptForSession(analysisTranscripts, id);
-            const risk = blendRiskWithTranscript(soberizeScore(local.risk, 0.28), transcriptText);
+            const risk = soberizeScore(local.risk, 0.28);
             return {
               session: id,
               emo: local.emo,
@@ -574,23 +388,16 @@
               lin: local.lin,
               csi: clampScore(100 - risk),
               risk,
-              insight: buildTranscriptGroundedInsight(
-                id,
-                transcriptText,
-                { ...local, csi: clampScore(100 - risk), risk },
-                'partial upload fallback'
-              )
+              insight: `Session ${id}: partial upload fallback (local estimate).`
             };
           }
           const csiRaw = clampScore(data?.csi?.csi_score ?? data?.user_latest_csi_score ?? 50);
           const driftRaw = Number(data?.drift?.overall_drift_score ?? 0);
           const driftNorm = clampScore(Math.round((Math.max(0, Math.min(3.5, driftRaw)) / 3.5) * 100));
 
-          // Backend-driven risk: inverse CSI is the primary signal; drift adds
-          // limited extra concern without overpowering the stability score.
-          const transcriptText = getTranscriptForSession(analysisTranscripts, id);
-          let risk = riskFromCsi(csiRaw, driftNorm, { driftWeight: 0.12, pull: 0.10 });
-          risk = blendRiskWithTranscript(risk, transcriptText);
+          // Backend-driven risk: primarily inverse CSI, with drift as secondary signal.
+          let risk = clampScore(Math.round((100 - csiRaw) * 0.86 + driftNorm * 0.14));
+          risk = soberizeScore(risk, 0.32);
 
           // Prevent abrupt visual jumps between consecutive sessions.
           if (prevRisk !== null) {
@@ -612,12 +419,7 @@
             lin,
             csi: csiRaw,
             risk,
-            insight: buildTranscriptGroundedInsight(
-              id,
-              transcriptText,
-              { emo, cog, hes, lin, csi: csiRaw, risk },
-              'backend CSI and drift analysis'
-            )
+            insight: `Session ${id}: backend-driven CSI and drift analysis.`
           };
         });
         setBackendStatus('online', 'Backend: online (current run)', 'Using current-run session analytics');
@@ -630,39 +432,30 @@
         );
       }
 
-      const userId = getCurrentUserId();
       let dashboardErr = null;
-      if (!userId) {
-        setBackendStatus('offline', 'Backend: offline', 'User must be created in backend before analysis.');
-        throw new Error('Missing backend user id. Please sign up again.');
+      if (!isLoggedIn()) {
+        setBackendStatus('offline', 'Backend: offline', 'You must be logged in before analysis.');
+        throw new Error('Not logged in. Please sign up or log in again.');
       }
 
       for (const base of getFastApiCandidates()) {
         try {
-          const endpoint = `${base}/api/dashboard/${userId}`;
-          const resp = await fetch(endpoint, { method: 'GET' });
+          const endpoint = `${base}/api/dashboard/me`;
+          const resp = await fetch(endpoint, { method: 'GET', headers: authHeaders() });
           const jd = await resp.json().catch(() => ({}));
           if (!resp.ok) throw new Error(jd.detail || jd.error || `Dashboard failed (${resp.status})`);
-          const expectedSessions = analysisTranscripts.length;
-          const dashboardSessions = Number(jd.session_count || 0);
-          if (dashboardSessions > 0 && dashboardSessions < expectedSessions) {
-            throw new Error(`Backend has only ${dashboardSessions}/${expectedSessions} sessions from this run.`);
-          }
 
           const csi = Array.isArray(jd?.trends?.csi) ? jd.trends.csi.map(clampScore) : [];
           const fallbackCsi = clampScore(jd?.latest_csi ?? 50);
-          const csiArrRaw = csi.length ? csi : [fallbackCsi];
-          const csiArr = csiArrRaw.slice(-Math.max(1, expectedSessions));
-          const riskArr = csiArr.map((v, i) => blendRiskWithTranscript(
-            riskFromCsi(v, 0, { driftWeight: 0, pull: 0.10 }),
-            analysisTranscripts[i]?.text || ''
-          ));
-          const emoArr = riskArr.map(v => clampScore(v * 0.72 + 14));
+          // Show the full accumulated history, not just today's check-in — that's the point of tracking over time.
+          const csiArr = csi.length ? csi : [fallbackCsi];
+          const riskArr = csiArr.map(v => soberizeScore(100 - v, 0.30));
+          const emoArr = csiArr.map(v => clampScore(v * 0.9 + 5));
           const cogArr = csiArr.slice();
-          const hesArr = riskArr.map(v => clampScore(v * 0.78 + 10));
-          const linArr = csiArr.map(v => clampScore(v * 0.88 + 6));
+          const hesArr = csiArr.map(v => clampScore(v * 0.75));
+          const linArr = csiArr.map(v => clampScore(100 - v * 0.6));
 
-          const riskScore = trendAdjustedLatestRisk(riskArr);
+          const riskScore = riskArr[riskArr.length - 1] ?? 50;
           let riskLabel = 'Low Risk', riskClass = 'low', riskColor = '#10b981', gradStop1 = '#10b981', gradStop2 = '#06b6d4', deltaText = 'Healthy range', deltaArrow = 'down';
           if (riskScore >= 35 && riskScore < 65) {
             riskLabel = 'Moderate Risk'; riskClass = 'moderate'; riskColor = '#f59e0b';
@@ -681,22 +474,13 @@
             gradStop2,
             deltaText,
             deltaArrow,
-            description: `Your speech biomarkers were analyzed across ${jd.session_count || analysisTranscripts.length} sessions (FastAPI dashboard).`,
+            description: jd.user_message?.headline
+              || `Your speech biomarkers were analyzed across ${jd.session_count || analysisTranscripts.length} sessions.`,
             analysisSource: 'FastAPI dashboard history',
-            insight: analysisTranscripts.map((t, i) => buildTranscriptGroundedInsight(
-              t.session,
-              t.text,
-              {
-                risk: riskArr[i] ?? riskScore,
-                csi: csiArr[i] ?? fallbackCsi,
-                cog: cogArr[i] ?? fallbackCsi,
-                lin: linArr[i] ?? 50,
-                hes: hesArr[i] ?? 50,
-                emo: emoArr[i] ?? 50
-              },
-              'FastAPI dashboard history'
-            )).join('\n---\n'),
-            insightMeta: 'Generated today · FastAPI dashboard · Not a clinical diagnosis',
+            insight: jd.user_message
+              ? `${jd.user_message.detail}${jd.user_message.doctor_suggestion ? ` We'd suggest starting with ${jd.user_message.doctor_suggestion}.` : ''}`
+              : `Baseline ready: ${jd.baseline_ready ? 'yes' : 'no'}.`,
+            insightMeta: 'Generated today · Not a clinical diagnosis',
             csiScore: csiArr[csiArr.length - 1] ?? fallbackCsi,
             indices: {
               emo: emoArr[emoArr.length - 1] ?? 50,
@@ -711,19 +495,7 @@
             lin: linArr,
             risk: riskArr,
             transcripts,
-            sessions: analysisTranscripts.map((t, i) => ({
-              session: t.session,
-              risk: riskArr[i] ?? riskScore,
-              csi: csiArr[i] ?? fallbackCsi,
-              cog: cogArr[i] ?? fallbackCsi,
-              lin: linArr[i] ?? 50,
-              hes: hesArr[i] ?? 50,
-              emo: emoArr[i] ?? 50
-            })),
-            explain: buildExplainability(
-              analysisTranscripts,
-              analysisTranscripts.map((t, i) => ({ session: t.session, risk: riskArr[i] ?? riskScore }))
-            )
+            sessions: []
           };
 
           backendStatusBase = base;
@@ -735,14 +507,7 @@
       }
 
       // Last-resort local analysis so dashboard still works offline.
-      const localPerSession = analysisTranscripts.map(t => {
-        const local = localHeuristicAnalysis(t.text);
-        return {
-          session: t.session,
-          ...local,
-          insight: buildTranscriptGroundedInsight(t.session, t.text, local, 'local fallback analysis')
-        };
-      });
+      const localPerSession = analysisTranscripts.map(t => ({ session: t.session, ...localHeuristicAnalysis(t.text) }));
       if (localPerSession.length) {
         setBackendStatus('checking', 'Backend: local fallback', 'Using in-browser fallback analysis');
         return buildAnalysisFromParsedSessions(localPerSession, transcripts, 'Local fallback analysis');
@@ -754,6 +519,33 @@
     }
 
     // Helper: display a warning banner for skipped sessions
+    function showTranscriptWarning(sessions) {
+      const msg = 'Session' + (sessions.length > 1 ? 's ' : ' ') + sessions.join(', ') + ' had no transcript and ' + (sessions.length > 1 ? 'were' : 'was') + ' skipped.';
+      let banner = document.getElementById('transcript-warning-banner');
+      if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'transcript-warning-banner';
+        banner.style.cssText = 'position:fixed;top:72px;left:50%;transform:translateX(-50%);z-index:999;background:rgba(245,158,11,0.15);color:#f59e0b;border:1px solid rgba(245,158,11,0.3);backdrop-filter:blur(12px);padding:12px 24px;border-radius:12px;font-size:14px;font-weight:500;font-family:Inter,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,0.3);animation:fadeUp 0.5s ease both;max-width:90%;text-align:center;';
+        document.body.appendChild(banner);
+        setTimeout(function () { if (banner.parentNode) banner.parentNode.removeChild(banner); }, 8000);
+      }
+      banner.textContent = '\u26A0\uFE0F ' + msg;
+    }
+
+    function showDemoResultsBanner() {
+      let banner = document.getElementById('demo-results-banner');
+      if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'demo-results-banner';
+        banner.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:999;background:rgba(24,176,158,0.15);color:#0f7a6a;border:1px solid rgba(24,176,158,0.35);backdrop-filter:blur(12px);padding:14px 22px;border-radius:14px;font-size:14px;font-weight:500;font-family:Inter,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,0.25);max-width:92%;text-align:center;display:flex;gap:14px;align-items:center;flex-wrap:wrap;justify-content:center;';
+        document.body.appendChild(banner);
+      }
+      banner.innerHTML = `
+        <span>This was a one-time demo \u2014 nothing was saved. Sign up to start real tracking.</span>
+        <button type="button" onclick="document.getElementById('demo-results-banner').remove(); showLogin();" style="background:#18b09e;color:#fff;border:none;border-radius:8px;padding:6px 14px;font-weight:600;cursor:pointer;">Sign Up</button>
+      `;
+    }
+
     // ══════════════════════════════════════════════
     //  GRAPH RENDERING
     // ══════════════════════════════════════════════
@@ -837,11 +629,6 @@
 
       document.getElementById('insight-text').textContent = p.insight;
       document.getElementById('insight-meta').textContent = p.insightMeta;
-      const explain = Array.isArray(p.explain) ? p.explain : [];
-      ['explain-1', 'explain-2', 'explain-3'].forEach((id, i) => {
-        const el = document.getElementById(id);
-        if (el && explain[i]) el.textContent = explain[i];
-      });
       document.getElementById('risk-csi-score').textContent = p.csiScore ?? p.indices?.cog ?? '—';
 
       const { emo, cog, flu } = p.indices;
@@ -1026,7 +813,14 @@
       'What are your thoughts on your fav music artist?'
     ];
 
+    // DEMO_MODE = no login, no persistence, mirrors the real mechanism for a one-time demo.
+    // RECORDING_STEPS_TOTAL = 3 for the demo (unchanged), 1 for a real logged-in check-in.
+    let DEMO_MODE = false;
+    let RECORDING_STEPS_TOTAL = 3;
+    let dynamicPromptText = null; // set by startCheckIn() from the LLM-generated daily prompt
+
     function getRecordingQuestion(step) {
+      if (dynamicPromptText) return dynamicPromptText;
       const idx = Number(step) - 1;
       return RECORDING_QUESTIONS[idx] || RECORDING_QUESTIONS[RECORDING_QUESTIONS.length - 1];
     }
@@ -1043,77 +837,6 @@
     function updateRecordingPrompt(step) {
       const timerLabel = document.getElementById('timer-label');
       if (timerLabel) timerLabel.textContent = getRecordingQuestion(step);
-    }
-
-    function prepareNextRecordingStep() {
-      const recordBtn = document.getElementById('record-btn');
-      const recordLabel = document.getElementById('record-label');
-      const timer = document.getElementById('timer');
-      const progressBar = document.getElementById('progress-bar');
-      const redoBtn = document.getElementById('redo-btn');
-      const transcriptBox = document.getElementById('transcript-box');
-      const sessionTranscriptCard = document.getElementById('session-transcript-card');
-
-      if (redoBtn) redoBtn.classList.remove('show');
-      if (transcriptBox) transcriptBox.style.display = 'none';
-      if (sessionTranscriptCard) sessionTranscriptCard.classList.remove('show');
-      if (timer) {
-        timer.classList.remove('active');
-        timer.textContent = '0:30';
-        timer.style.letterSpacing = '';
-      }
-      if (progressBar) progressBar.style.width = '0%';
-      if (recordLabel) {
-        recordLabel.classList.remove('on');
-        recordLabel.textContent = `Tap to Record ${currentStep}`;
-      }
-      if (recordBtn) {
-        recordBtn.classList.remove('recording', 'disabled');
-        recordBtn.disabled = false;
-        recordBtn.style.pointerEvents = 'auto';
-        recordBtn.style.opacity = '1';
-      }
-      updateRecordingPrompt(currentStep);
-      setTimeout(() => {
-        const wrap = document.querySelector('.record-button-wrap');
-        if (wrap) wrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }, 80);
-    }
-
-    function resetRecordingUiState() {
-      isRecording = false;
-      isRecordingTransition = false;
-      if (timerInterval) clearInterval(timerInterval);
-      timerInterval = null;
-      const recordBtn = document.getElementById('record-btn');
-      const recordRing = document.getElementById('record-ring');
-      const recordRing2 = document.getElementById('record-ring2');
-      const micIdle = document.getElementById('mic-idle');
-      const micActive = document.getElementById('mic-active');
-      const recordLabel = document.getElementById('record-label');
-      const timer = document.getElementById('timer');
-      const progressBar = document.getElementById('progress-bar');
-      const transcriptBox = document.getElementById('transcript-box');
-      if (recordBtn) recordBtn.classList.remove('recording');
-      if (recordBtn && isLoggedIn()) {
-        recordBtn.classList.remove('disabled');
-        recordBtn.disabled = false;
-      }
-      if (recordRing) recordRing.classList.remove('active');
-      if (recordRing2) recordRing2.classList.remove('active');
-      if (micIdle) micIdle.style.display = 'block';
-      if (micActive) micActive.style.display = 'none';
-      if (recordLabel) {
-        recordLabel.classList.remove('on');
-        recordLabel.textContent = completedSteps >= 3 ? 'Complete' : 'Tap to Record';
-      }
-      if (timer) {
-        timer.classList.remove('active');
-        timer.textContent = completedSteps >= 3 ? '✓' : '0:30';
-      }
-      if (progressBar && completedSteps < 3) progressBar.style.width = '0%';
-      if (transcriptBox) transcriptBox.style.display = 'none';
-      if (completedSteps < 3) updateRecordingPrompt(currentStep);
     }
 
     function releaseMicrophone() {
@@ -1137,11 +860,16 @@
     function initSpeechRecognition() {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (!SpeechRecognition) return false;
-      recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = 'en-US';
-      recognition.onresult = (event) => {
+      // Capture this specific instance in the closure below — `recognition` (the outer
+      // variable) gets reassigned to a new instance every time a new session starts, so
+      // stale event handlers from a previous session's instance must never act on it.
+      const instance = new SpeechRecognition();
+      recognition = instance;
+      instance.continuous = true;
+      instance.interimResults = true;
+      instance.lang = 'en-US';
+      instance.onresult = (event) => {
+        if (recognition !== instance) return; // stale instance from an earlier session
         let interim = '';
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const t = event.results[i][0].transcript;
@@ -1154,18 +882,20 @@
         liveTranscriptSnapshot = (sessionTranscript + interim).trim();
         updateTranscriptUI(liveTranscriptSnapshot);
       };
-      recognition.onerror = (e) => {
+      instance.onerror = (e) => {
         // Keep real capture only; do not inject demo transcript.
         if (e.error !== 'aborted') {
           console.warn('SpeechRecognition error:', e.error);
         }
       };
-      recognition.onend = () => {
-        // Keep recognition alive through the full recording interval.
-        if (isRecording) {
+      instance.onend = () => {
+        // Only auto-restart if this instance is still the one actively in use — a stale
+        // instance's onend firing late (after a new session already replaced `recognition`)
+        // must not call .start() on a different, possibly already-running instance.
+        if (isRecording && recognition === instance) {
           setTimeout(() => {
-            if (!isRecording) return;
-            try { recognition.start(); } catch (err) { }
+            if (!isRecording || recognition !== instance) return;
+            try { instance.start(); } catch (err) { }
           }, 120);
         }
       };
@@ -1212,10 +942,46 @@
       wrap.style.display = 'block';
     }
 
-    async function uploadSessionForFeatureExtraction(blob, sessionId, transcriptText, fileName = null) {
+    async function uploadSessionForFeatureExtraction(blob, sessionId, transcriptText, fileName = null, idempotencyKey = null) {
       if (!blob) return null;
+
+      if (DEMO_MODE) {
+        let lastErr = null;
+        for (const base of getFastApiCandidates()) {
+          try {
+            const endpoint = `${base}/api/demo/extract`;
+            const fd = new FormData();
+            fd.append('audio', blob, fileName || `session-${sessionId}.wav`);
+            fd.append('transcript', transcriptText || '');
+
+            const ctrl = new AbortController();
+            const timeout = setTimeout(() => ctrl.abort(), 8000);
+            const resp = await fetch(endpoint, { method: 'POST', body: fd, signal: ctrl.signal });
+            clearTimeout(timeout);
+            const jd = await resp.json().catch(() => ({}));
+            if (!resp.ok) throw new Error(jd.detail || jd.error || `HTTP ${resp.status}`);
+            backendStatusBase = base;
+            setBackendStatus('online', `Backend: online (${backendHostLabel(base)})`, `Demo-extracted session ${sessionId}`);
+
+            demoFeatureAccumulator[sessionId] = {
+              ...jd.acoustic_features,
+              ...jd.temporal_features,
+              ...jd.linguistic_features
+            };
+
+            // Placeholder, matching how the real /api/upload response looks before a baseline
+            // exists (sessions 1-2): real z-scores/CSI only land once /api/demo/finalize runs.
+            return { demo: true, csi: { csi_score: 50 }, drift: {}, user_latest_csi_score: 50, baseline_ready: false };
+          } catch (e) {
+            lastErr = e;
+          }
+        }
+        console.warn('Demo session extract failed:', lastErr);
+        return { skipped: true, error: (lastErr && lastErr.message) || 'Demo extract failed' };
+      }
+
       const userId = getCurrentUserId();
-      if (!userId) throw new Error('Missing backend user id. Please sign up first.');
+      if (!userId) throw new Error('Missing backend user id. Please sign up or log in first.');
 
       let lastErr = null;
       for (const base of getFastApiCandidates()) {
@@ -1223,13 +989,17 @@
           const endpoint = `${base}/api/upload`;
           const fd = new FormData();
           fd.append('audio', blob, fileName || `session-${sessionId}.wav`);
-          fd.append('user_id', String(userId));
           fd.append('transcript', transcriptText || '');
-          fd.append('quick', 'true');
+          if (idempotencyKey) fd.append('idempotency_key', idempotencyKey);
 
           const ctrl = new AbortController();
           const timeout = setTimeout(() => ctrl.abort(), 8000);
-          const resp = await fetch(endpoint, { method: 'POST', body: fd, signal: ctrl.signal });
+          const resp = await fetch(endpoint, {
+            method: 'POST',
+            body: fd,
+            headers: authHeaders(),
+            signal: ctrl.signal
+          });
           clearTimeout(timeout);
           const jd = await resp.json().catch(() => ({}));
           if (!resp.ok) throw new Error(jd.detail || jd.error || `HTTP ${resp.status}`);
@@ -1246,6 +1016,36 @@
       return { skipped: true, error: (lastErr && lastErr.message) || 'Upload failed' };
     }
 
+    async function finalizeDemoAnalysis() {
+      const sessionIds = Object.keys(demoFeatureAccumulator).map(Number).sort((a, b) => a - b);
+      if (sessionIds.length < 2) return;
+      const sessions = sessionIds.map(id => demoFeatureAccumulator[id]);
+
+      for (const base of getFastApiCandidates()) {
+        try {
+          const resp = await fetch(`${base}/api/demo/finalize`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessions })
+          });
+          const jd = await resp.json().catch(() => ({}));
+          if (!resp.ok) throw new Error(jd.detail || jd.error || `HTTP ${resp.status}`);
+
+          const lastId = sessionIds[sessionIds.length - 1];
+          currentRunSessionAnalytics[lastId] = {
+            demo: true,
+            csi: jd.csi,
+            drift: jd.drift,
+            user_latest_csi_score: jd?.csi?.csi_score ?? 50,
+            baseline_ready: true
+          };
+          return;
+        } catch (e) {
+          console.warn('Demo finalize failed:', e);
+        }
+      }
+    }
+
     async function waitForPendingSessionUploads(maxMs = 5000) {
       const jobs = Object.values(pendingTranscriptions);
       if (!jobs.length) return;
@@ -1258,12 +1058,10 @@
     async function transcribeSessionAudio(blob) {
       if (!blob) return null;
       const candidates = [];
-      const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.protocol === 'file:';
-      if (isLocal) {
-        candidates.push('http://localhost:3000', 'http://127.0.0.1:3000');
-      } else {
-        candidates.push(PRODUCTION_NODE_URL);
+      if (window.location.origin && /^https?:\/\//.test(window.location.origin)) {
+        candidates.push(window.location.origin.replace(/\/$/, ''));
       }
+      candidates.push('http://localhost:3000', 'http://127.0.0.1:3000');
 
       for (const base of candidates) {
         for (let attempt = 0; attempt < 2; attempt++) {
@@ -1364,22 +1162,89 @@
       }
     }
 
-    function isLoggedIn() { return !!localStorage.getItem('cognivara_user'); }
+    function isLoggedIn() { return !!localStorage.getItem('cognivara_token'); }
 
     function scrollToRecord(e) {
       if (e) e.preventDefault();
-      if (!isLoggedIn()) { showLogin(); return; }
+      if (!DEMO_MODE && !isLoggedIn()) { showLogin(); return; }
       showHomeAndRecord();
       updateNav('nav-record');
       setTimeout(() => document.getElementById('recording').scrollIntoView({ behavior: 'smooth' }), 100);
     }
 
     function toggleRecord() {
-      if (!isLoggedIn()) { showLogin(); return; }
+      if (!DEMO_MODE && !isLoggedIn()) { showLogin(); return; }
       if (isRecordingTransition) return;
-      if (completedSteps >= 3) return; // guard — use startNewRecording() to reset
+      if (completedSteps >= RECORDING_STEPS_TOTAL) return; // guard — use startNewRecording() to reset
       if (!isRecording) startRecording();
       else { clearInterval(timerInterval); stopRecording(); }
+    }
+
+    function startDemo() {
+      DEMO_MODE = true;
+      RECORDING_STEPS_TOTAL = 3;
+      dynamicPromptText = null;
+      demoFeatureAccumulator = {};
+      startNewRecording();
+    }
+
+    async function startCheckIn() {
+      if (!isLoggedIn()) { showLogin(); return; }
+      DEMO_MODE = false;
+      RECORDING_STEPS_TOTAL = 1;
+      dynamicPromptText = null;
+
+      try {
+        const recent = await fetchRecentTranscriptsForPrompt();
+        dynamicPromptText = await fetchDailyPrompt(recent);
+      } catch (e) {
+        dynamicPromptText = null; // getRecordingQuestion() falls back to the static prompt pool
+      }
+
+      startNewRecording();
+    }
+
+    async function fetchRecentTranscriptsForPrompt() {
+      for (const base of getFastApiCandidates()) {
+        try {
+          const resp = await fetch(`${base}/api/sessions/me`, { headers: authHeaders() });
+          if (!resp.ok) continue;
+          const jd = await resp.json();
+          const sessions = Array.isArray(jd.sessions) ? jd.sessions : [];
+          return sessions
+            .slice(-5)
+            .reverse()
+            .map(s => s.transcript)
+            .filter(t => typeof t === 'string' && t.trim());
+        } catch (e) {
+          // try next candidate
+        }
+      }
+      return [];
+    }
+
+    async function fetchDailyPrompt(recentTranscripts) {
+      const candidates = [];
+      if (window.location.origin && /^https?:\/\//.test(window.location.origin)) {
+        candidates.push(window.location.origin.replace(/\/$/, ''));
+      }
+      candidates.push('http://localhost:3000', 'http://127.0.0.1:3000');
+
+      for (const base of candidates) {
+        try {
+          const resp = await fetch(`${base}/api/daily-prompt`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ recentTranscripts })
+          });
+          if (!resp.ok) continue;
+          const jd = await resp.json();
+          if (jd && typeof jd.prompt === 'string' && jd.prompt.trim()) return jd.prompt.trim();
+        } catch (e) {
+          // try next candidate
+        }
+      }
+      return null;
     }
 
     function startNewRecording() {
@@ -1397,10 +1262,23 @@
       recordedChunks = [];
       isRecordingTransition = false;
       // Reset UI
+      const titleEl = document.getElementById('recording-title');
+      const subtitleEl = document.getElementById('recording-subtitle');
+      const eyebrowEl = document.getElementById('recording-eyebrow');
+      if (DEMO_MODE) {
+        if (eyebrowEl) eyebrowEl.textContent = 'Demo — Not Saved';
+        if (titleEl) titleEl.textContent = 'See How It Works';
+        if (subtitleEl) subtitleEl.textContent = 'Complete 3 short recordings to see the scoring mechanism in action. Nothing is saved — sign up for real tracking.';
+      } else {
+        if (eyebrowEl) eyebrowEl.textContent = 'Voice Check-In';
+        if (titleEl) titleEl.textContent = 'Check In';
+        if (subtitleEl) subtitleEl.textContent = 'Share what\'s on your mind. This adds to your personal tracked history — check in as often as you like.';
+      }
       for (let i = 1; i <= 3; i++) {
         const s = document.getElementById(`step-${i}`);
+        s.style.display = i <= RECORDING_STEPS_TOTAL ? '' : 'none';
         s.className = 'baseline-step' + (i === 1 ? ' active' : '');
-        s.innerHTML = `<div class="step-dot"></div>Recording ${i} of 3`;
+        s.innerHTML = `<div class="step-dot"></div>Recording ${i} of ${RECORDING_STEPS_TOTAL}`;
       }
       document.getElementById('timer').textContent = '0:30';
       document.getElementById('timer').style.letterSpacing = '';
@@ -1436,7 +1314,7 @@
     });
 
     function startRecording() {
-      if (isRecording || isRecordingTransition || completedSteps >= 3) return;
+      if (isRecording || isRecordingTransition || completedSteps >= RECORDING_STEPS_TOTAL) return;
       isRecording = true;
       isRecordingTransition = false;
       timeLeft = 30;
@@ -1479,9 +1357,6 @@
       // Capture raw audio via one persistent microphone stream so permission is requested only once.
       ensureMicrophoneAccess().then(stream => {
         try {
-          if (!window.MediaRecorder) {
-            throw new Error('This browser does not support in-app audio recording');
-          }
           const preferred = [
             'audio/webm;codecs=opus',
             'audio/webm',
@@ -1493,8 +1368,6 @@
           mediaRecorder = chosen ? new MediaRecorder(stream, { mimeType: chosen }) : new MediaRecorder(stream);
         } catch (e) {
           mediaRecorder = null;
-          resetRecordingUiState();
-          alert(`Recording is not available on this device: ${e.message}`);
           return;
         }
         const sessionChunks = [];
@@ -1503,7 +1376,6 @@
         mediaRecorder.start(250);
       }).catch(e => {
         mediaRecorder = null;
-        resetRecordingUiState();
         if (USE_BROWSER_SPEECH_RECOGNITION) {
           updateTranscriptUI('Live transcript unavailable. Recording will still be saved for this session.');
         }
@@ -1547,22 +1419,16 @@
 
       // Show session transcript card with REAL spoken text
       const stc = document.getElementById('session-transcript-card');
-      const stcBadge = document.getElementById('stc-session-badge');
-      const stcText = document.getElementById('stc-text');
-      const stcWords = document.getElementById('stc-words');
-      const stcDuration = document.getElementById('stc-duration');
-      if (stcBadge) stcBadge.textContent = `Session ${sessionId}`;
-      if (stcText) stcText.textContent = initialText;
-      if (stcWords) stcWords.textContent = browserText ? `${countWords(browserText)} words` : 'Counting words...';
-      if (stcDuration) stcDuration.textContent = formatRecordedDuration(elapsedSec);
-      if (stc) stc.classList.add('show');
+      document.getElementById('stc-session-badge').textContent = `Session ${sessionId}`;
+      document.getElementById('stc-text').textContent = initialText;
+      document.getElementById('stc-words').textContent = browserText ? `${countWords(browserText)} words` : 'Counting words...';
+      document.getElementById('stc-duration').textContent = formatRecordedDuration(elapsedSec);
+      stc.classList.add('show');
 
       // Snapshot recorder state for this session to avoid cross-session race conditions.
       const recorderRef = mediaRecorder;
       const chunksRef = recordedChunks;
       const mimeTypeRef = mediaMimeType;
-      mediaRecorder = null;
-      recordedChunks = [];
 
       // Upload each recorded session to the FastAPI analytics backend.
       let transcriptionPromise = Promise.resolve();
@@ -1581,24 +1447,45 @@
             if (!chunksRef || chunksRef.length === 0) {
               const idx = allTranscripts.findIndex(x => x.session === sessionId);
               if (idx >= 0 && !browserText) {
-                allTranscripts[idx].text = 'Transcript still processing in background.';
-                updateSessionCardIfCurrent(sessionId, 'Transcript still processing in background.');
+                allTranscripts[idx].text = 'Transcript unavailable for this session.';
+                updateSessionCardIfCurrent(sessionId, 'Transcript unavailable for this session.');
                 renderAllTranscripts();
               }
               return;
             }
             const rawBlob = new Blob(chunksRef, { type: mimeTypeRef || 'audio/webm' });
-            const transcribePromise = !browserText ? transcribeSessionAudio(rawBlob) : Promise.resolve(null);
-            // Do not block backend upload on transcription API latency.
-            // If browser transcript is unavailable, upload with empty transcript.
-            const transcriptText = browserText || '';
+            // Happy path: the browser already captured a live transcript, so upload proceeds
+            // immediately with zero added latency. Only when the browser produced nothing do
+            // we wait for the server-side Whisper transcription (bounded by its own internal
+            // timeouts) before uploading — the alternative was uploading with an empty
+            // transcript right away and only ever patching the on-screen text afterward, which
+            // meant the score never reflected what was actually said whenever live captioning
+            // came up empty.
+            let transcriptText = browserText;
+            if (!transcriptText) {
+              transcriptText = ((await transcribeSessionAudio(rawBlob)) || '').trim();
+              const idx = allTranscripts.findIndex(x => x.session === sessionId);
+              const resolvedText = transcriptText || 'Transcript unavailable for this session.';
+              if (idx >= 0) allTranscripts[idx].text = resolvedText;
+              updateSessionCardIfCurrent(sessionId, resolvedText);
+              renderAllTranscripts();
+            }
+
+            // One key per physical recording, reused across every upload attempt for it (the
+            // raw-blob try, the WAV fallback, and any candidate-origin retry inside
+            // uploadSessionForFeatureExtraction) so a retried/duplicated request gets the
+            // original result replayed instead of creating a second session server-side.
+            const idempotencyKey = (window.crypto && crypto.randomUUID)
+              ? crypto.randomUUID()
+              : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
             // Upload raw blob first for speed. Convert/retry only if backend rejects it.
             let uploadResult = await uploadSessionForFeatureExtraction(
               rawBlob,
               sessionId,
               transcriptText,
-              `session-${sessionId}.webm`
+              `session-${sessionId}.webm`,
+              idempotencyKey
             );
 
             if (!uploadResult || uploadResult.skipped) {
@@ -1608,7 +1495,8 @@
                   wavBlob,
                   sessionId,
                   transcriptText,
-                  `session-${sessionId}.wav`
+                  `session-${sessionId}.wav`,
+                  idempotencyKey
                 );
               } catch (convertErr) {
                 console.warn('WAV fallback conversion failed:', convertErr);
@@ -1618,36 +1506,22 @@
             if (uploadResult && !uploadResult.skipped) {
               currentRunSessionAnalytics[sessionId] = uploadResult;
             }
-
-            // Background transcription only updates UI text; it does not block analysis.
-            if (!browserText) {
-              void (async () => {
-                const transcribed = await transcribePromise;
-                const idx = allTranscripts.findIndex(x => x.session === sessionId);
-                if (transcribed && transcribed.trim()) {
-                  const resolvedText = transcribed.trim();
-                  if (idx >= 0) allTranscripts[idx].text = resolvedText;
-                  updateSessionCardIfCurrent(sessionId, resolvedText);
-                  renderAllTranscripts();
-                } else if (idx >= 0 && allTranscripts[idx].text.toLowerCase().includes('pending')) {
-                  allTranscripts[idx].text = 'Transcript still processing in background.';
-                  updateSessionCardIfCurrent(sessionId, 'Transcript still processing in background.');
-                  renderAllTranscripts();
-                }
-              })();
-            }
           } catch (e) {
             console.warn('Session analytics upload failed', e);
             const fallbackText = allTranscripts.find(x => x.session === sessionId)?.text || '';
             updateSessionCardIfCurrent(sessionId, fallbackText || `Session upload failed: ${e.message}`);
+          } finally {
+            // Keep microphone stream alive across sessions and don't clobber newer session state.
+            if (recordedChunks === chunksRef) recordedChunks = [];
+            if (mediaRecorder === recorderRef) mediaRecorder = null;
           }
         })();
       } else {
         // No captured audio buffer: keep deterministic fallback text instead of "transcribing..." placeholder.
         const idx = allTranscripts.findIndex(x => x.session === sessionId);
         if (idx >= 0 && !browserText) {
-          allTranscripts[idx].text = 'Transcript still processing in background.';
-          updateSessionCardIfCurrent(sessionId, 'Transcript still processing in background.');
+          allTranscripts[idx].text = 'Transcript unavailable for this session.';
+          updateSessionCardIfCurrent(sessionId, 'Transcript unavailable for this session.');
           renderAllTranscripts();
         }
       }
@@ -1656,19 +1530,21 @@
       const step = document.getElementById(`step-${sessionId}`);
       step.classList.remove('active');
       step.classList.add('completed');
-      step.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> Recording ${sessionId} of 3`;
+      step.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> Recording ${sessionId} of ${RECORDING_STEPS_TOTAL}`;
       completedSteps++;
       currentStep++;
 
-      // Show redo button (only if not all 3 done yet, so user can redo last session)
-      if (completedSteps < 3) {
-        document.getElementById('redo-btn').classList.remove('show');
+      // Show redo button (only if not all steps done yet, so user can redo the last session)
+      if (completedSteps < RECORDING_STEPS_TOTAL) {
+        document.getElementById('redo-btn').classList.add('show');
       }
 
-      if (completedSteps < 3) {
-        const nextStep = document.getElementById(`step-${currentStep}`);
-        if (nextStep) nextStep.classList.add('active');
-        prepareNextRecordingStep();
+      if (completedSteps < RECORDING_STEPS_TOTAL) {
+        document.getElementById('timer').textContent = '0:30';
+        document.getElementById('progress-bar').style.width = '0%';
+        document.getElementById('record-label').textContent = 'Tap to Record';
+        updateRecordingPrompt(currentStep);
+        // Wait for the user to tap the record button themselves — do not auto-start the next session.
         isRecordingTransition = false;
       } else {
         document.getElementById('progress-bar').style.width = '100%';
@@ -1680,7 +1556,8 @@
         document.getElementById('transcript-box').style.display = 'none';
 
         Promise.resolve()
-          .then(() => waitForPendingSessionUploads(8000))
+          .then(() => waitForPendingSessionUploads(4000))
+          .then(() => (DEMO_MODE ? finalizeDemoAnalysis() : Promise.resolve()))
           .then(() => {
             renderAllTranscripts();
             return computeUserAnalysis(allTranscripts);
@@ -1724,7 +1601,10 @@
             renderComparePage(currentComparePatient);
 
             isRecordingTransition = false;
-            setTimeout(showDashboard, 1400);
+            setTimeout(() => {
+              showDashboard();
+              if (DEMO_MODE) showDemoResultsBanner();
+            }, 1400);
           })
           .catch(err => {
             console.error('Analysis failed', err);
@@ -1743,13 +1623,14 @@
       // Remove from transcripts array
       allTranscripts = allTranscripts.filter(t => t.session !== currentStep);
       delete currentRunSessionAnalytics[currentStep];
+      delete demoFeatureAccumulator[currentStep];
       delete pendingTranscriptions[currentStep];
       renderAllTranscripts();
       // Reset the step pill
       const step = document.getElementById(`step-${currentStep}`);
       step.classList.remove('completed');
       step.classList.add('active');
-      step.innerHTML = `<div class="step-dot"></div>Recording ${currentStep} of 3`;
+      step.innerHTML = `<div class="step-dot"></div>Recording ${currentStep} of ${RECORDING_STEPS_TOTAL}`;
       // Reset timer & progress
       document.getElementById('timer').textContent = '0:30';
       document.getElementById('timer').style.letterSpacing = '';
@@ -1786,16 +1667,6 @@
       if (userAnalysis) showDashboard();
     }
 
-    function showScientificFoundation() {
-      hideAllPages();
-      updateNav('nav-foundation');
-
-      // Load scientific foundation component instead of showing embedded section
-      loadComponent('scientific-foundation', 'main-content');
-
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    }
-
     // ══════════════════════════════════════════════
     //  PAGE NAVIGATION
     // ══════════════════════════════════════════════
@@ -1811,7 +1682,6 @@
       const heroSection = document.getElementById('hero-section');
       const recordingSection = document.getElementById('recording-section');
       const dashboard = document.getElementById('dashboard');
-      const scientificFoundation = document.getElementById('scientific-foundation');
       const profile = document.getElementById('profile-page');
       const settings = document.getElementById('settings-page');
       const compare = document.getElementById('compare-page');
@@ -1823,7 +1693,6 @@
 
       // Do not override explicit nav states for other pages.
       if (dashboard.classList.contains('show')) return;
-      if (scientificFoundation.classList.contains('show')) return;
       if (profile.style.display === 'block' || settings.style.display === 'block' || compare.style.display === 'block') return;
 
       const nav = document.querySelector('nav');
@@ -1837,8 +1706,6 @@
       document.getElementById('hero-section').style.display = 'none';
       document.getElementById('recording-section').style.display = 'none';
       document.getElementById('dashboard').classList.remove('show');
-      document.getElementById('scientific-foundation').classList.remove('show');
-      document.getElementById('scientific-foundation').style.display = 'none';
       document.getElementById('profile-page').style.display = 'none';
       document.getElementById('settings-page').style.display = 'none';
       document.getElementById('compare-page').style.display = 'none';
@@ -1921,6 +1788,35 @@
       textEl.textContent = `Risk ${direction} by ${Math.abs(diff)} points across ${scores.length} sessions. ${flagged ? `Top flagged features: ${flagged}.` : 'No major feature flags this week.'}`;
     }
 
+    function renderProfileAccountBadges(dashUser) {
+      const el = document.getElementById('profile-account-badges');
+      if (!el) return;
+      const emailVerified = !!(dashUser && dashUser.email_verified);
+      const googleLinked = !!(dashUser && dashUser.google_linked);
+
+      const emailBadge = emailVerified
+        ? `<span style="background:rgba(16,185,129,0.12);color:#0f7a5f;border:1px solid rgba(16,185,129,0.3);border-radius:20px;padding:4px 12px;font-size:12px;font-weight:600;">Email Verified</span>`
+        : `<span style="background:rgba(59,130,246,0.12);color:#1d4ed8;border:1px solid rgba(59,130,246,0.3);border-radius:20px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer;" onclick="resendVerificationEmail()">Email Not Verified — Resend</span>`;
+      const googleBadge = googleLinked
+        ? `<span style="background:rgba(24,176,158,0.12);color:#0f7a6a;border:1px solid rgba(24,176,158,0.3);border-radius:20px;padding:4px 12px;font-size:12px;font-weight:600;">Google Linked</span>`
+        : '';
+
+      el.innerHTML = emailBadge + googleBadge;
+    }
+
+    function renderProfileTrendChart(scores) {
+      const wrap = document.getElementById('profile-trend-chart');
+      const svg = document.getElementById('profile-trend-svg');
+      if (!wrap || !svg) return;
+      if (!Array.isArray(scores) || scores.length < 2) {
+        wrap.style.display = 'none';
+        return;
+      }
+      const color = scoreToneColor(scores[scores.length - 1]);
+      svg.innerHTML = makePath(scores, 300, 90, color, true);
+      wrap.style.display = 'block';
+    }
+
     async function showProfilePage() {
       hideAllPages();
       const user = JSON.parse(localStorage.getItem('cognivara_user') || '{}');
@@ -1939,12 +1835,12 @@
         else ageGroup = '60+';
       }
       document.getElementById('profile-age-large').textContent = ageGroup;
-      document.getElementById('profile-start-date').textContent = user.startDate || 'Feb 1, 2026';
-      document.getElementById('profile-start-date').textContent = user.startDate || 'Feb 1, 2026';
+      document.getElementById('profile-start-date').textContent = '—';
       document.getElementById('profile-risk-large').textContent = userAnalysis ? userAnalysis.riskLabel : 'No analysis yet';
       document.getElementById('profile-risk-large').style.color = userAnalysis ? userAnalysis.riskColor : '#8a9ab0';
       document.getElementById('profile-total-rec').textContent = String((userAnalysis && userAnalysis.risk && userAnalysis.risk.length) || 0);
-      document.getElementById('profile-baseline').textContent = (userAnalysis && userAnalysis.risk && userAnalysis.risk.length >= 3) ? 'Yes' : 'Building';
+      document.getElementById('profile-baseline').textContent = (userAnalysis && userAnalysis.risk && userAnalysis.risk.length >= 3) ? 'Ready' : 'Building';
+      renderProfileAccountBadges(user.emailVerified !== undefined ? { email_verified: user.emailVerified } : null);
 
       // Frontend fallback rendering from current analysis.
       if (userAnalysis && Array.isArray(userAnalysis.risk) && userAnalysis.risk.length) {
@@ -1954,19 +1850,20 @@
         }));
         renderProfileHistoryRows(localRows);
         renderWeeklySummaryFromScores(localRows.map(r => r.score), []);
+        renderProfileTrendChart(Array.isArray(userAnalysis.csi) ? userAnalysis.csi : localRows.map(r => r.score));
       } else {
         renderProfileHistoryRows([]);
         renderWeeklySummaryFromScores([], []);
+        renderProfileTrendChart([]);
       }
 
-      // Backend-enriched profile data if available.
+      // Backend-enriched profile data if available — this is the real, accumulated history.
       try {
-        const userId = getCurrentUserId();
-        if (userId) {
+        if (isLoggedIn()) {
           let dash = null;
           for (const base of getFastApiCandidates()) {
             try {
-              const resp = await fetch(`${base}/api/dashboard/${userId}`);
+              const resp = await fetch(`${base}/api/dashboard/me`, { headers: authHeaders() });
               if (!resp.ok) continue;
               dash = await resp.json();
               break;
@@ -1981,8 +1878,21 @@
             }));
             renderProfileHistoryRows(rows);
             renderWeeklySummaryFromScores(scores, dash.flagged_features || []);
-            document.getElementById('profile-total-rec').textContent = String(dash.session_count || rows.length || 0);
-            document.getElementById('profile-baseline').textContent = dash.baseline_ready ? 'Yes' : 'Building';
+            renderProfileTrendChart(scores);
+            renderProfileAccountBadges(dash.user || null);
+
+            const sessionCount = dash.session_count || rows.length || 0;
+            const sessionsNeeded = dash.sessions_needed || 3;
+            document.getElementById('profile-total-rec').textContent = String(sessionCount);
+            document.getElementById('profile-baseline').textContent = dash.baseline_ready
+              ? 'Ready'
+              : `Building (${sessionCount}/${sessionsNeeded} check-ins)`;
+            if (dash.user && dash.user.created_at) {
+              const d = new Date(dash.user.created_at);
+              document.getElementById('profile-start-date').textContent = isNaN(d.getTime())
+                ? '—'
+                : d.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+            }
           }
         }
       } catch (e) {}
@@ -2012,25 +1922,15 @@
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
-    function showScientificFoundation() {
-      hideAllPages();
-      updateNav('nav-foundation');
-      document.getElementById('scientific-foundation').classList.add('show');
-      document.getElementById('scientific-foundation').style.display = 'block';
-      document.getElementById('profile-dropdown').classList.remove('show');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    }
-
     function saveSettings() {
       const existing = getStoredUser();
       const user = {
         ...existing,
         name: document.getElementById('settings-name').value.trim(),
-        email: document.getElementById('settings-email').value.trim(),
         age: document.getElementById('settings-age').value.trim()
       };
-      if (!user.name || !user.email || !user.age) { alert('All fields required'); return; }
-      syncUserWithBackend(user)
+      if (!user.name || !user.age) { alert('All fields required'); return; }
+      updateProfileWithBackend(user)
         .then(saved => {
           localStorage.setItem('cognivara_user', JSON.stringify(saved));
           updateUserUI();
@@ -2045,41 +1945,7 @@
     function showLogin() { document.getElementById('login-modal').classList.remove('hidden'); }
     function hideLogin() { document.getElementById('login-modal').classList.add('hidden'); }
 
-    // ══════════════════════════════════════════════
-    //  RESEARCH MODAL
-    // ══════════════════════════════════════════════
-    function openResearchModal() {
-      const modal = document.getElementById('research-modal');
-      if (modal) {
-        modal.classList.add('active');
-        document.body.style.overflow = 'hidden'; // Prevent background scrolling
-      }
-    }
-
-    function closeResearchModal() {
-      const modal = document.getElementById('research-modal');
-      if (modal) {
-        modal.classList.remove('active');
-        document.body.style.overflow = ''; // Restore scrolling
-      }
-    }
-
-    // Close modal when clicking outside
-    document.addEventListener('click', function(event) {
-      const modal = document.getElementById('research-modal');
-      if (modal && event.target === modal) {
-        closeResearchModal();
-      }
-    });
-
-    // Close modal on Escape key
-    document.addEventListener('keydown', function(event) {
-      if (event.key === 'Escape') {
-        closeResearchModal();
-      }
-    });
-
-    async function syncUserWithBackend(user) {
+    async function signupWithBackend(user) {
       let lastErr = null;
       for (const base of getFastApiCandidates()) {
         try {
@@ -2088,9 +1954,72 @@
           fd.append('email', user.email || '');
           fd.append('age', String(user.age || ''));
           if (user.gender) fd.append('gender', user.gender);
-          if (user.password) fd.append('password', user.password);
+          fd.append('password', user.password || '');
 
-          const resp = await fetch(`${base}/api/user`, { method: 'POST', body: fd });
+          const resp = await fetch(`${base}/api/auth/signup`, { method: 'POST', body: fd });
+          const jd = await resp.json().catch(() => ({}));
+          if (!resp.ok) throw new Error(jd.detail || jd.error || `HTTP ${resp.status}`);
+
+          backendStatusBase = base;
+          setBackendStatus('online', `Backend: online (${backendHostLabel(base)})`, `Connected to ${base}`);
+
+          return {
+            name: jd.name,
+            email: jd.email,
+            age: jd.age,
+            gender: jd.gender || '',
+            userId: jd.user_id,
+            token: jd.token,
+            emailVerified: !!jd.email_verified
+          };
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+      throw (lastErr || new Error('Could not reach FastAPI backend'));
+    }
+
+    async function loginWithBackend(email, password) {
+      let lastErr = null;
+      for (const base of getFastApiCandidates()) {
+        try {
+          const fd = new FormData();
+          fd.append('email', email || '');
+          fd.append('password', password || '');
+
+          const resp = await fetch(`${base}/api/auth/login`, { method: 'POST', body: fd });
+          const jd = await resp.json().catch(() => ({}));
+          if (!resp.ok) throw new Error(jd.detail || jd.error || `HTTP ${resp.status}`);
+
+          backendStatusBase = base;
+          setBackendStatus('online', `Backend: online (${backendHostLabel(base)})`, `Connected to ${base}`);
+
+          return {
+            name: jd.name,
+            email: jd.email,
+            age: jd.age,
+            gender: jd.gender || '',
+            userId: jd.user_id,
+            token: jd.token,
+            emailVerified: !!jd.email_verified
+          };
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+      throw (lastErr || new Error('Could not reach FastAPI backend'));
+    }
+
+    async function updateProfileWithBackend(user) {
+      let lastErr = null;
+      for (const base of getFastApiCandidates()) {
+        try {
+          const fd = new FormData();
+          if (user.name) fd.append('name', user.name);
+          if (user.age) fd.append('age', String(user.age));
+          if (user.gender) fd.append('gender', user.gender);
+
+          const resp = await fetch(`${base}/api/auth/me`, { method: 'PATCH', body: fd, headers: authHeaders() });
           const jd = await resp.json().catch(() => ({}));
           if (!resp.ok) throw new Error(jd.detail || jd.error || `HTTP ${resp.status}`);
 
@@ -2099,15 +2028,114 @@
 
           return {
             ...user,
-            userId: jd.user_id,
-            gender: jd.gender || user.gender || '',
-            password: ''
+            name: jd.name,
+            email: jd.email,
+            age: jd.age,
+            gender: jd.gender || '',
+            emailVerified: !!jd.email_verified
           };
         } catch (e) {
           lastErr = e;
         }
       }
       throw (lastErr || new Error('Could not reach FastAPI backend'));
+    }
+
+    let googleSignInInitialized = false;
+
+    function getGoogleClientId() {
+      const meta = document.querySelector('meta[name="google-client-id"]');
+      const value = meta ? meta.content.trim() : '';
+      if (!value || value === 'YOUR_GOOGLE_CLIENT_ID') return null;
+      return value;
+    }
+
+    function initGoogleSignIn() {
+      if (googleSignInInitialized) return;
+      const clientId = getGoogleClientId();
+      const container = document.getElementById('google-signin-btn');
+      const divider = document.getElementById('google-signin-divider');
+      if (!clientId || !container || !window.google || !window.google.accounts) return;
+
+      try {
+        google.accounts.id.initialize({ client_id: clientId, callback: handleGoogleCredential });
+        google.accounts.id.renderButton(container, { theme: 'outline', size: 'large', width: 320, text: 'continue_with' });
+        if (divider) divider.style.display = 'flex';
+        googleSignInInitialized = true;
+      } catch (e) {
+        console.warn('Google Sign-In init failed:', e);
+      }
+    }
+
+    async function handleGoogleCredential(response) {
+      if (!response || !response.credential) return;
+      let lastErr = null;
+      for (const base of getFastApiCandidates()) {
+        try {
+          const resp = await fetch(`${base}/api/auth/google`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id_token: response.credential })
+          });
+          const jd = await resp.json().catch(() => ({}));
+          if (!resp.ok) throw new Error(jd.detail || jd.error || `HTTP ${resp.status}`);
+
+          backendStatusBase = base;
+          setBackendStatus('online', `Backend: online (${backendHostLabel(base)})`, `Connected to ${base}`);
+
+          localStorage.setItem('cognivara_token', jd.token);
+          localStorage.setItem('cognivara_user', JSON.stringify({
+            name: jd.name,
+            email: jd.email,
+            age: jd.age,
+            gender: jd.gender || '',
+            userId: jd.user_id,
+            emailVerified: !!jd.email_verified
+          }));
+          hideLogin();
+          updateUserUI();
+          window.location.reload();
+          return;
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+      alert(`Google sign-in failed.\n\n${(lastErr && lastErr.message) || 'Could not reach backend'}`);
+    }
+
+    async function handlePendingEmailVerification() {
+      const params = new URLSearchParams(window.location.search);
+      const token = params.get('verify_email');
+      if (!token) return;
+
+      let verified = false;
+      for (const base of getFastApiCandidates()) {
+        try {
+          const resp = await fetch(`${base}/api/auth/verify-email`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token })
+          });
+          if (resp.ok) { verified = true; break; }
+        } catch (e) {
+          // try next candidate
+        }
+      }
+
+      if (verified) {
+        const cached = getStoredUser();
+        if (cached && cached.userId) {
+          cached.emailVerified = true;
+          localStorage.setItem('cognivara_user', JSON.stringify(cached));
+        }
+      }
+
+      const url = new URL(window.location.href);
+      url.searchParams.delete('verify_email');
+      window.history.replaceState({}, '', url.toString());
+
+      alert(verified ? 'Your email has been verified!' : 'That verification link is invalid or has expired.');
+      updateUserUI();
     }
 
     function submitSignup(e) {
@@ -2119,26 +2147,74 @@
         gender: document.getElementById('input-gender').value.trim(),
         password: document.getElementById('input-password').value
       };
-      if (!user.name || !user.email || !user.age || !user.gender) {
-        alert('Please fill all required fields.');
+      if (!user.name || !user.email || !user.age || !user.gender || !user.password) {
+        alert('Please fill all signup fields.');
         return;
       }
-      syncUserWithBackend(user)
+      if (user.password.length < 8) {
+        alert('Password must be at least 8 characters.');
+        return;
+      }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(user.email)) {
+        alert('Please enter a valid email address.');
+        return;
+      }
+      signupWithBackend(user)
         .then(saved => {
+          localStorage.setItem('cognivara_token', saved.token);
           localStorage.setItem('cognivara_user', JSON.stringify(saved));
           document.getElementById('login-form').reset();
           hideLogin();
           updateUserUI();
-          showHomeAndRecord();
-          refreshBackendStatus(true);
+          window.location.reload();
         })
-        .catch(err => alert(`Could not create account in backend. Make sure FastAPI is running.\n\n${err.message}`));
+        .catch(err => alert(`Could not create account. Make sure FastAPI is running.\n\n${err.message}`));
+    }
+
+    function submitLogin(e) {
+      e.preventDefault();
+      const email = document.getElementById('input-login-email').value.trim();
+      const password = document.getElementById('input-login-password').value;
+      if (!email || !password) {
+        alert('Please enter your email and password.');
+        return;
+      }
+      loginWithBackend(email, password)
+        .then(saved => {
+          localStorage.setItem('cognivara_token', saved.token);
+          localStorage.setItem('cognivara_user', JSON.stringify(saved));
+          document.getElementById('login-form-login').reset();
+          hideLogin();
+          updateUserUI();
+          window.location.reload();
+        })
+        .catch(err => alert(`Login failed.\n\n${err.message}`));
+    }
+
+    function showSignupTab() {
+      document.getElementById('login-tab-signup').classList.add('active-tab');
+      document.getElementById('login-tab-login').classList.remove('active-tab');
+      document.getElementById('login-form').classList.remove('hidden');
+      document.getElementById('login-form-login').classList.add('hidden');
+    }
+
+    function showLoginTab() {
+      document.getElementById('login-tab-login').classList.add('active-tab');
+      document.getElementById('login-tab-signup').classList.remove('active-tab');
+      document.getElementById('login-form-login').classList.remove('hidden');
+      document.getElementById('login-form').classList.add('hidden');
     }
 
     function updateUserUI() {
       const u = localStorage.getItem('cognivara_user');
       const recordBtn = document.getElementById('record-btn');
       const avatar = document.getElementById('profile-btn');
+      const navCheckIn = document.getElementById('nav-record');
+      const navSignedOut = document.getElementById('nav-record-signedout');
+      const mobileNavCheckIn = document.getElementById('mobile-nav-record');
+      const mobileNavSignedOut = document.getElementById('mobile-nav-record-signedout');
+      const heroCheckIn = document.getElementById('hero-checkin-btn');
+      const heroSignup = document.getElementById('hero-signup-btn');
       if (u) {
         const user = JSON.parse(u);
         document.getElementById('login-btn').style.display = 'none';
@@ -2149,22 +2225,85 @@
           avatar.textContent = initials;
         }
         if (recordBtn) { recordBtn.classList.remove('disabled'); recordBtn.disabled = false; }
+        if (navCheckIn) navCheckIn.style.display = '';
+        if (navSignedOut) navSignedOut.style.display = 'none';
+        if (mobileNavCheckIn) mobileNavCheckIn.style.display = '';
+        if (mobileNavSignedOut) mobileNavSignedOut.style.display = 'none';
+        if (heroCheckIn) heroCheckIn.style.display = '';
+        if (heroSignup) heroSignup.style.display = 'none';
+        if (user.emailVerified === false) showVerifyEmailBanner();
+        else hideVerifyEmailBanner();
       } else {
         document.getElementById('login-btn').style.display = 'inline-block';
         if (avatar) avatar.style.display = 'none';
         document.getElementById('profile-dropdown').classList.remove('show');
         if (recordBtn) { recordBtn.classList.add('disabled'); recordBtn.disabled = true; }
+        if (navCheckIn) navCheckIn.style.display = 'none';
+        if (navSignedOut) navSignedOut.style.display = '';
+        if (mobileNavCheckIn) mobileNavCheckIn.style.display = 'none';
+        if (mobileNavSignedOut) mobileNavSignedOut.style.display = '';
+        if (heroCheckIn) heroCheckIn.style.display = 'none';
+        if (heroSignup) heroSignup.style.display = '';
+        hideVerifyEmailBanner();
       }
+    }
+
+    function showVerifyEmailBanner() {
+      let banner = document.getElementById('verify-email-banner');
+      if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'verify-email-banner';
+        banner.style.cssText = 'position:fixed;top:72px;left:50%;transform:translateX(-50%);z-index:998;background:rgba(59,130,246,0.12);color:#1d4ed8;border:1px solid rgba(59,130,246,0.3);backdrop-filter:blur(12px);padding:10px 20px;border-radius:12px;font-size:13px;font-weight:500;font-family:Inter,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,0.15);max-width:92%;text-align:center;display:flex;gap:12px;align-items:center;flex-wrap:wrap;justify-content:center;';
+        document.body.appendChild(banner);
+      }
+      banner.innerHTML = `
+        <span>Please verify your email address.</span>
+        <button type="button" id="resend-verification-btn" style="background:#3b82f6;color:#fff;border:none;border-radius:8px;padding:4px 12px;font-weight:600;cursor:pointer;font-size:12px;">Resend Email</button>
+        <button type="button" id="dismiss-verify-banner-btn" style="background:none;border:none;color:#1d4ed8;cursor:pointer;font-size:16px;line-height:1;padding:0 4px;" aria-label="Dismiss">&times;</button>
+      `;
+      document.getElementById('resend-verification-btn').onclick = resendVerificationEmail;
+      document.getElementById('dismiss-verify-banner-btn').onclick = hideVerifyEmailBanner;
+    }
+
+    function hideVerifyEmailBanner() {
+      const banner = document.getElementById('verify-email-banner');
+      if (banner) banner.remove();
+    }
+
+    async function resendVerificationEmail() {
+      const btn = document.getElementById('resend-verification-btn');
+      if (btn) { btn.disabled = true; btn.textContent = 'Sending...'; }
+      for (const base of getFastApiCandidates()) {
+        try {
+          const resp = await fetch(`${base}/api/auth/resend-verification`, { method: 'POST', headers: authHeaders() });
+          if (resp.ok) {
+            if (btn) btn.textContent = 'Sent!';
+            return;
+          }
+        } catch (e) {
+          // try next candidate
+        }
+      }
+      if (btn) { btn.disabled = false; btn.textContent = 'Resend Email'; }
+      alert('Could not resend the verification email. Please try again later.');
     }
 
     function logout() {
       releaseMicrophone();
+      const headers = authHeaders();
+      if (headers.Authorization) {
+        const [base] = getFastApiCandidates();
+        if (base) fetch(`${base}/api/auth/logout`, { method: 'POST', headers }).catch(() => {});
+      }
       localStorage.removeItem('cognivara_user');
+      localStorage.removeItem('cognivara_token');
       userAnalysis = null;
       allTranscripts = [];
       currentRunSessionAnalytics = {};
+      demoFeatureAccumulator = {};
       completedSteps = 0;
       currentStep = 1;
+      DEMO_MODE = false;
       updateUserUI();
       document.getElementById('profile-dropdown').classList.remove('show');
       document.getElementById('compare-float-btn').classList.remove('show');
@@ -2175,15 +2314,23 @@
       document.getElementById('profile-dropdown').classList.toggle('show');
     }
 
+    function toggleMobileMenu() {
+      document.getElementById('mobile-nav-menu').classList.toggle('show');
+    }
+
+    function closeMobileMenu() {
+      document.getElementById('mobile-nav-menu').classList.remove('show');
+    }
+
     // ══════════════════════════════════════════════
     //  WAVEFORM
     // ══════════════════════════════════════════════
     const waveformEvents = [
-      { pct: 23, time: '00:07', label: 'Pitch Spike', color: '#1a6eb5', detail: 'A sharp pitch excursion suggests abrupt vocal effort or emphasis at this point in the recording.' },
-      { pct: 40, time: '00:12', label: 'Elevated Stress', color: '#f59e0b', detail: 'Stress-colored bars cluster here, indicating heightened vocal tension and denser energy variation.' },
-      { pct: 60, time: '00:18', label: 'Hesitation', color: '#ef4444', detail: 'The waveform narrows and breaks into shorter pulses, consistent with a hesitation-heavy segment.' },
-      { pct: 76, time: '00:23', label: 'Negative Tone', color: '#f59e0b', detail: 'This segment is flagged for heavier tonal pressure and a more strained delivery pattern.' },
-      { pct: 90, time: '00:27', label: 'Reduced Pitch Variation', color: '#1a6eb5', detail: 'Pitch variation flattens toward the end of the session, suggesting lower expressiveness in the closing phrase.' }
+      { pct: 23, time: '00:07', label: 'Pitch Spike', color: '#2f7dd1', detail: 'A sharp pitch excursion suggests abrupt vocal effort or emphasis at this point in the recording.' },
+      { pct: 40, time: '00:12', label: 'Elevated Stress', color: '#ef7d1a', detail: 'Stress-colored bars cluster here, indicating heightened vocal tension and denser energy variation.' },
+      { pct: 60, time: '00:18', label: 'Hesitation', color: '#f05252', detail: 'The waveform narrows and breaks into shorter pulses, consistent with a hesitation-heavy segment.' },
+      { pct: 76, time: '00:23', label: 'Negative Tone', color: '#f97316', detail: 'This segment is flagged for heavier tonal pressure and a more strained delivery pattern.' },
+      { pct: 90, time: '00:27', label: 'Reduced Pitch Variation', color: '#1cb5a3', detail: 'Pitch variation flattens toward the end of the session, suggesting lower expressiveness in the closing phrase.' }
     ];
 
     function setWaveformDetail(eventInfo) {
@@ -2233,12 +2380,12 @@
         const motion = Math.sin(i * 0.42) * 0.45 + Math.sin(i * 0.11 + 1.7) * 0.22 + Math.cos(i * 0.07) * 0.18;
         const h = 10 + Math.abs(motion) * 34 + envelope * 16;
         const y = 46 - h / 2;
-        let c = '#64748b'; // Default muted color for non-event bars
-        if (i > 26 && i < 30) c = '#1a6eb5'; // Pitch Spike at 23% - blue
-        if (i > 46 && i < 50) c = '#f59e0b'; // Elevated Stress at 40% - amber
-        if (i > 70 && i < 74) c = '#ef4444'; // Hesitation at 60% - red
-        if (i > 89 && i < 93) c = '#f59e0b'; // Negative Tone at 76% - amber
-        if (i > 105 && i < 109) c = '#1a6eb5'; // Reduced Pitch Variation at 90% - blue
+        let c = '#78aee3';
+        if (i > 16 && i < 20) c = '#e8b949';
+        if (i > 28 && i < 34) c = '#f08b86';
+        if (i > 42 && i < 46) c = '#ef9f70';
+        if (i > 54 && i < 58) c = '#eda35f';
+        if (i > 64 && i < 68) c = '#37b9ab';
         html += `<rect class="waveform-bar" data-index="${i}" x="${x}" y="${y}" width="4.8" height="${h}" rx="2.4" fill="${c}" opacity="0.96"/>`;
       }
       svg.innerHTML = html;
@@ -2297,39 +2444,24 @@
       if (!e.target.closest('#profile-btn') && !e.target.closest('#profile-dropdown')) {
         document.getElementById('profile-dropdown').classList.remove('show');
       }
+      if (!e.target.closest('#mobile-menu-btn') && !e.target.closest('#mobile-nav-menu')) {
+        closeMobileMenu();
+      }
     });
-
-    // ══════════════════════════════════════════════
-    //  FOOTER LINKS
-    // ══════════════════════════════════════════════
-    function showPrivacyPolicy() {
-      alert('Privacy Policy:\n\nCognivara collects voice recordings solely for cognitive risk analysis. All data is processed locally and not stored on external servers. Voice data is used only for real-time analysis and is not retained after processing. We comply with HIPAA guidelines for health-related data handling.');
-    }
-
-    function showTermsOfService() {
-      alert('Terms of Service:\n\nCognivara is provided for research and educational purposes only. This application is not intended for clinical diagnosis or medical decision-making. Users acknowledge that results are experimental and should not replace professional medical advice. Continued use constitutes acceptance of these terms.');
-    }
-
-    function showContact() {
-      alert('Contact Information:\n\nFor research inquiries: research@cognivara.ai\nFor technical support: support@cognivara.ai\nFor academic partnerships: partnerships@cognivara.ai\n\nCognivara is developed by researchers at leading AI institutions.');
-    }
 
     window.addEventListener('DOMContentLoaded', () => {
       initReveal();
       updateUserUI();
       refreshBackendStatus(true);
       setInterval(() => refreshBackendStatus(false), 30000);
+      initGoogleSignIn(); // safety net if the GIS script's own onload already fired before app.js was ready
+      handlePendingEmailVerification();
       // If user is logged in, go home; if not, show home
       goHome();
     });
 
     window.addEventListener('scroll', syncHomeRecordNavByScroll, { passive: true });
     window.addEventListener('resize', syncHomeRecordNavByScroll);
-    window.addEventListener('online', () => { refreshBackendStatus(true); });
-    window.addEventListener('focus', () => { refreshBackendStatus(true); });
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') refreshBackendStatus(true);
-    });
 
     window.addEventListener('beforeunload', () => {
       releaseMicrophone();

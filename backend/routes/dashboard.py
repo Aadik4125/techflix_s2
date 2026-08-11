@@ -1,27 +1,31 @@
 """
 CogniVara — Dashboard Routes
-GET /api/dashboard/{user_id} → Full dashboard data (CSI, trends, features)
-GET /api/baseline/{user_id}  → Current baseline status
+GET /api/dashboard/me → Full dashboard data (CSI, trends, features) for the authenticated user
+GET /api/baseline/me  → Current baseline status for the authenticated user
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session as DBSession
 
+from config import BASELINE_SESSION_COUNT
+from routes.auth import _user_payload
 from database import get_db
 from models.user import User
 from models.session import Session
 from models.baseline import Baseline
+from routes.auth import get_current_user
 from services.baseline import TRACKED_FEATURES, _merge_features
+from services.csi import compute_csi
+from services.drift import get_domain_flag_streaks
+from services.interpretation import build_user_message
 
 router = APIRouter()
 
 
-@router.get('/dashboard/{user_id}')
-def get_dashboard(user_id: int, db: DBSession = Depends(get_db)):
+@router.get('/dashboard/me')
+def get_dashboard(user: User = Depends(get_current_user), db: DBSession = Depends(get_db)):
 
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail='User not found')
+    user_id = user.id
 
     sessions = (
         db.query(Session)
@@ -36,6 +40,26 @@ def get_dashboard(user_id: int, db: DBSession = Depends(get_db)):
     latest = sessions[-1] if sessions else None
     latest_csi = latest.csi_score if latest else None
     latest_drift = latest.drift_scores if latest else None
+
+    # Recompute the pure CSI output (cheap — no audio/DB work) purely to recover `confidence`,
+    # which isn't persisted on the session row, so the plain-language message can tell a
+    # low-confidence ("not enough data yet") result apart from a genuinely stable one.
+    latest_flagged = (latest_drift or {}).get('flagged_features', [])
+    if latest is not None:
+        latest_csi_data = compute_csi(latest.z_scores or {}, latest_drift or {})
+        domain_streaks = get_domain_flag_streaks(
+            db, user_id, latest_flagged, exclude_session_id=latest.id
+        )
+        user_message = build_user_message(
+            csi_score=latest_csi if latest_csi is not None else 50,
+            confidence=latest_csi_data.get('confidence', 0.0),
+            flagged_features=latest_flagged,
+            domain_streaks=domain_streaks,
+        )
+    else:
+        user_message = build_user_message(
+            csi_score=50, confidence=0.0, flagged_features=[], domain_streaks={}
+        )
 
     # Build longitudinal trend arrays
     trends = {key: [] for key in TRACKED_FEATURES}
@@ -70,23 +94,17 @@ def get_dashboard(user_id: int, db: DBSession = Depends(get_db)):
         }
 
     return {
-        'user': {
-            'id': user.id,
-            'name': user.name,
-            'email': user.email,
-            'age': user.age,
-            'latest_csi_score': user.latest_csi_score,
-            'total_sessions': user.total_sessions,
-            'last_session_at': user.last_session_at.isoformat() if user.last_session_at else None,
-        },
+        'user': _user_payload(user),
         'session_count': len(sessions),
         'baseline_ready': baseline is not None and baseline.feature_means is not None,
         'baseline_sessions': baseline.session_count if baseline else 0,
+        'sessions_needed': BASELINE_SESSION_COUNT,
 
         # Latest scores
         'latest_csi': latest_csi,
         'latest_risk_level': (latest_drift or {}).get('per_feature', {}),
         'flagged_features': (latest_drift or {}).get('flagged_features', []),
+        'user_message': user_message,
 
         # Feature summary (latest session)
         'feature_summary': feature_summary,
@@ -100,12 +118,10 @@ def get_dashboard(user_id: int, db: DBSession = Depends(get_db)):
     }
 
 
-@router.get('/baseline/{user_id}')
-def get_baseline_status(user_id: int, db: DBSession = Depends(get_db)):
-    """Check baseline status for a user."""
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail='User not found')
+@router.get('/baseline/me')
+def get_baseline_status(user: User = Depends(get_current_user), db: DBSession = Depends(get_db)):
+    """Check baseline status for the authenticated user."""
+    user_id = user.id
 
     baseline = db.query(Baseline).filter(Baseline.user_id == user_id).first()
     session_count = db.query(Session).filter(Session.user_id == user_id).count()
@@ -114,53 +130,7 @@ def get_baseline_status(user_id: int, db: DBSession = Depends(get_db)):
         'user_id': user_id,
         'baseline_ready': baseline is not None and baseline.feature_means is not None,
         'sessions_completed': session_count,
-        'sessions_needed': 3,
+        'sessions_needed': BASELINE_SESSION_COUNT,
         'feature_means': baseline.feature_means if baseline else None,
         'feature_stds': baseline.feature_stds if baseline else None,
-    }
-
-
-@router.get('/users')
-def list_users(db: DBSession = Depends(get_db)):
-    """Temporary admin-style endpoint to inspect user rows as JSON."""
-    users = db.query(User).order_by(User.id.desc()).all()
-    return {
-        'count': len(users),
-        'users': [
-            {
-                'id': u.id,
-                'name': u.name,
-                'email': u.email,
-                'age': u.age,
-                'gender': u.gender,
-                'latest_csi_score': u.latest_csi_score,
-                'total_sessions': u.total_sessions,
-                'last_session_at': u.last_session_at.isoformat() if u.last_session_at else None,
-                'created_at': u.created_at.isoformat() if u.created_at else None,
-            }
-            for u in users
-        ],
-    }
-
-
-@router.get('/sessions')
-def list_sessions(db: DBSession = Depends(get_db)):
-    """Temporary admin-style endpoint to inspect session rows as JSON."""
-    sessions = db.query(Session).order_by(Session.id.desc()).all()
-    return {
-        'count': len(sessions),
-        'sessions': [
-            {
-                'id': s.id,
-                'user_id': s.user_id,
-                'session_number': s.session_number,
-                'transcript': s.transcript,
-                'csi_score': s.csi_score,
-                'acoustic_features': s.acoustic_features or {},
-                'temporal_features': s.temporal_features or {},
-                'linguistic_features': s.linguistic_features or {},
-                'created_at': s.created_at.isoformat() if s.created_at else None,
-            }
-            for s in sessions
-        ],
     }

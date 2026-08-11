@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend-tests:
+    name: Backend tests (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements-dev.txt
+
+      - name: Run pytest
+        run: pytest
+
+  node-syntax:
+    name: Node syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Node dependencies
+        run: npm install
+
+      - name: Check Node service syntax
+        run: |
+          node --check services/node/server.js
+          node --check services/node/hf.service.js
+          node --check services/node/groq.service.js
+
+      - name: Check frontend script syntax
+        run: |
+          node --check frontend/scripts/app.js
+          node --check frontend/scripts/background.js

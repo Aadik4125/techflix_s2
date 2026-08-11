@@ -19,13 +19,14 @@ _DOMAIN_BLEND = {
     'temporal': 0.35,
     'linguistic': 0.25,
 }
-_FEATURE_DOMAINS = {
+FEATURE_DOMAINS = {
     'mfcc_variance_avg': 'acoustic',
     'pitch_mean': 'acoustic',
     'pitch_var': 'acoustic',
     'pitch_range': 'acoustic',
     'voiced_fraction': 'acoustic',
     'jitter_local': 'acoustic',
+    'hnr_mean': 'acoustic',
     'shimmer_local': 'acoustic',
     'spectral_centroid_mean': 'acoustic',
     'spectral_centroid_var': 'acoustic',
@@ -52,7 +53,7 @@ _FEATURE_DOMAINS = {
     'vocabulary_richness': 'linguistic',
 }
 _DOMAIN_FEATURES = {
-    domain: tuple(key for key, mapped in _FEATURE_DOMAINS.items() if mapped == domain)
+    domain: tuple(key for key, mapped in FEATURE_DOMAINS.items() if mapped == domain)
     for domain in _DOMAIN_BLEND
 }
 
@@ -142,7 +143,7 @@ def compute_csi(z_scores: dict, drift_data: dict) -> dict:
 
     raw_components = {
         key: float(z_scores[key])
-        for key in _FEATURE_DOMAINS
+        for key in FEATURE_DOMAINS
         if key in z_scores
     }
     components = {key: _normalize_z_deviation(value) for key, value in raw_components.items()}

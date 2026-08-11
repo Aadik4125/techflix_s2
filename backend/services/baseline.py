@@ -23,6 +23,7 @@ TRACKED_FEATURES = [
     'pitch_range',
     'voiced_fraction',
     'jitter_local',
+    'hnr_mean',
     'shimmer_local',
     'spectral_centroid_mean',
     'spectral_centroid_var',
@@ -69,8 +70,28 @@ def _merge_features(session_row: Session) -> dict[str, Any]:
     return merged
 
 
+def compute_baseline_stats(
+    feature_dicts: list[dict[str, Any]],
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Compute per-feature mean/std from a list of merged feature dicts. Pure — no DB access."""
+    feature_matrix: dict[str, list[float]] = {key: [] for key in TRACKED_FEATURES}
+    for merged in feature_dicts:
+        for key in TRACKED_FEATURES:
+            val = merged.get(key, 0.0)
+            feature_matrix[key].append(float(val) if val is not None else 0.0)
+
+    means: dict[str, float] = {}
+    stds: dict[str, float] = {}
+    for key in TRACKED_FEATURES:
+        arr = np.array(feature_matrix[key], dtype=float)
+        means[key] = round(float(np.mean(arr)), 6)
+        stds[key] = round(float(np.std(arr)), 6)
+
+    return means, stds
+
+
 def compute_baseline(db: DBSession, user_id: int) -> Baseline | None:
-    """Compute baseline from the first N sessions."""
+    """Compute baseline from the first N sessions and persist it."""
     sessions = (
         db.query(Session)
         .filter(Session.user_id == user_id)
@@ -82,19 +103,7 @@ def compute_baseline(db: DBSession, user_id: int) -> Baseline | None:
     if len(sessions) < BASELINE_SESSION_COUNT:
         return None
 
-    feature_matrix: dict[str, list[float]] = {key: [] for key in TRACKED_FEATURES}
-    for sess in sessions:
-        merged = _merge_features(sess)
-        for key in TRACKED_FEATURES:
-            val = merged.get(key, 0.0)
-            feature_matrix[key].append(float(val) if val is not None else 0.0)
-
-    means: dict[str, float] = {}
-    stds: dict[str, float] = {}
-    for key in TRACKED_FEATURES:
-        arr = np.array(feature_matrix[key], dtype=float)
-        means[key] = round(float(np.mean(arr)), 6)
-        stds[key] = round(float(np.std(arr)), 6)
+    means, stds = compute_baseline_stats([_merge_features(sess) for sess in sessions])
 
     baseline = db.query(Baseline).filter(Baseline.user_id == user_id).first()
     if baseline is not None:
@@ -116,19 +125,19 @@ def compute_baseline(db: DBSession, user_id: int) -> Baseline | None:
 
 
 def compute_z_scores(
-    baseline: Baseline, current_features: dict[str, Any]
+    feature_means: dict[str, Any],
+    feature_stds: dict[str, Any],
+    current_features: dict[str, Any],
 ) -> dict[str, float]:
-    """Compute Z-score for each tracked feature."""
-    if not isinstance(baseline.feature_means, dict) or not isinstance(
-        baseline.feature_stds, dict
-    ):
+    """Compute Z-score for each tracked feature. Pure — no DB access."""
+    if not isinstance(feature_means, dict) or not isinstance(feature_stds, dict):
         return {}
 
     z_scores: dict[str, float] = {}
     for key in TRACKED_FEATURES:
         current_val = current_features.get(key, 0.0)
-        mean = float(baseline.feature_means.get(key, 0.0))
-        std = float(baseline.feature_stds.get(key, 0.0))
+        mean = float(feature_means.get(key, 0.0))
+        std = float(feature_stds.get(key, 0.0))
         std_floor = max(_ABS_STD_FLOOR, abs(mean) * _REL_STD_FLOOR)
         effective_std = max(std, std_floor)
 

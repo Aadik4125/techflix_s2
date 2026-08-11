@@ -1,2 +1,0 @@
-"""CogniVara application package."""
-

@@ -1,6 +1,6 @@
 """
 CogniVara — Acoustic Feature Extraction
-MFCCs, pitch, jitter, shimmer, spectral centroid, energy, speech rate.
+MFCCs, pitch, jitter, shimmer, HNR, spectral centroid, energy, speech rate.
 """
 
 import numpy as np
@@ -64,6 +64,55 @@ def extract_pitch_and_jitter(y: np.ndarray, sr: int) -> dict:
         result['jitter_abs'] = 0.0
 
     return result
+
+
+# ── Harmonics-to-Noise Ratio ──────────────────────────────
+
+def extract_hnr(y: np.ndarray, sr: int,
+                 fmin: float = 50.0, fmax: float = 500.0,
+                 frame_length: int = 2048, hop_length: int = 512) -> dict:
+    """
+    Harmonics-to-Noise Ratio via normalized autocorrelation (Boersma, 1993) — the same
+    method Praat uses, and one of the most consistently reported acoustic markers in
+    Parkinson's/dysarthria voice research. Lower HNR = breathier, noisier voicing.
+    """
+    min_lag = int(sr / fmax)
+    max_lag = int(sr / fmin)
+    window = np.hanning(frame_length)
+
+    hnr_values = []
+    for start in range(0, max(len(y) - frame_length, 0) + 1, hop_length):
+        frame = y[start:start + frame_length]
+        if len(frame) < frame_length or np.max(np.abs(frame)) < 1e-6:
+            continue
+
+        windowed = frame * window
+        acf = np.correlate(windowed, windowed, mode='full')
+        acf = acf[len(acf) // 2:]
+        zero_lag = acf[0]
+        if zero_lag <= 0:
+            continue
+        acf = acf / zero_lag
+
+        if max_lag >= len(acf) or min_lag >= max_lag:
+            continue
+        candidate = acf[min_lag:max_lag]
+        if len(candidate) == 0:
+            continue
+
+        r_max = float(np.max(candidate))
+        r_max = min(max(r_max, 0.0), 0.999999)  # keep log() well-defined
+        if r_max <= 0.0:
+            continue
+        hnr_values.append(10.0 * np.log10(r_max / (1.0 - r_max)))
+
+    if not hnr_values:
+        return {'hnr_mean': 0.0, 'hnr_var': 0.0}
+
+    return {
+        'hnr_mean': _safe_float(np.mean(hnr_values)),
+        'hnr_var': _safe_float(np.var(hnr_values)),
+    }
 
 
 # ── Shimmer + Energy (single RMS call) ───────────────────
@@ -133,6 +182,7 @@ def extract_all_acoustic_features(y: np.ndarray, sr: int) -> dict:
     features = {}
     features.update(extract_mfccs(y, sr))
     features.update(extract_pitch_and_jitter(y, sr))       # single pYIN call
+    features.update(extract_hnr(y, sr))
     features.update(extract_shimmer_and_energy(y, sr))      # single RMS call
     features.update(extract_spectral_centroid(y, sr))
     features.update(estimate_speech_rate(y, sr))

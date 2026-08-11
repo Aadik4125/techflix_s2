@@ -2,12 +2,10 @@ services:
   - type: web
     name: cognivara-backend
     runtime: python
-    rootDir: .
+    rootDir: backend
     plan: free
-    # Install backend requirements from the monorepo root to avoid build failures
-    buildCommand: pip install -r backend/requirements.txt
-    # Run uvicorn pointing at the backend module when deployed from repo root
-    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -16,7 +14,33 @@ services:
       - key: CORS_ORIGINS
         sync: false
       - key: FAST_ANALYSIS_MODE
-        value: "true"
+        value: "false"
+      - key: AUTH_TOKEN_TTL_DAYS
+        value: "30"
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM_EMAIL
+        value: onboarding@resend.dev
+      - key: FRONTEND_BASE_URL
+        sync: false
+      - key: EMAIL_VERIFICATION_TTL_HOURS
+        value: "24"
+      - key: SENTRY_DSN
+        sync: false
+      - key: ENVIRONMENT
+        value: production
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ENDPOINT_URL
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_REGION
+        sync: false
 
   - type: web
     name: cognivara-node
@@ -39,6 +63,14 @@ services:
         value: cardiffnlp/twitter-roberta-base-sentiment-latest
       - key: HF_SENTIMENT_FALLBACK_MODEL
         value: distilbert/distilbert-base-uncased-finetuned-sst-2-english
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: llama-3.3-70b-versatile
+      - key: SENTRY_DSN
+        sync: false
+      - key: NODE_ENV
+        value: production
 
 databases:
   - name: cognivara-db

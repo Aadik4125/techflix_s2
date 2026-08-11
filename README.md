@@ -3,21 +3,18 @@
 CogniVara is a multi-service cognitive speech analysis project with:
 
 - A static frontend (`frontend/`)
-- A Node service for transcription and analysis proxy (`services/node/`)
-- A Python FastAPI backend for cognitive analytics (`backend/`)
+- A Node service for transcription, analysis proxy, and LLM-generated check-in prompts (`services/node/`)
+- A Python FastAPI backend for cognitive analytics and authentication (`backend/`)
+
+The product has two entry points: a no-login **demo** (`POST /api/demo/*`, three recordings, one-time result, nothing persisted) and a real, authenticated **check-in** flow (`POST /api/upload`, one recording per check-in, unlimited check-ins, builds a real longitudinal baseline). See `backend/routes/auth.py` and `backend/routes/demo.py`.
 
 ## Repository Status
 
-The repository is functional and already separated by runtime concern, but it still carries some prototype-era layout decisions.
+The repository is functional and separated by runtime concern.
 
-The main structural gap is that the backend currently has both:
+The backend previously had two parallel layouts: a live flat structure (`backend/routes`, `backend/services`, `backend/models`) and an unused package-oriented structure (`backend/app/...`, plus `backend/alembic/`) that was never wired into `main.py`, the Dockerfile, or `render.yaml`, and had no working Celery producer despite a `docker-compose.yml` worker service referencing it. That dead package has been removed; `backend/routes`, `backend/services`, and `backend/models` are the single canonical backend layout.
 
-- a legacy flat structure in `backend/routes`, `backend/services`, and `backend/models`
-- a newer package-oriented structure in `backend/app/...`
-
-For professional maintenance, treat `backend/app/` as the long-term canonical backend package and treat the flat backend folders as legacy until they are consolidated.
-
-See [PROJECT_STRUCTURE.md](/Users/ASUS/Desktop/test_case_2/docs/PROJECT_STRUCTURE.md) for the authoritative structure guide.
+See [PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md) for the authoritative structure guide.
 
 ## Project Structure
 
@@ -30,30 +27,17 @@ test_case_2/
     scripts/
       app.js
       background.js
-      api.js
-      recording.js
-      ui.js
-      component-loader.js
-    components/
-      *.html
   services/
     node/
       server.js
       hf.service.js
   backend/
-    app/
-      api/
-      core/
-      db/
-      models/
-      schemas/
-      services/
-      tasks/
     main.py
-    routes/           # legacy flat backend layout
-    services/         # legacy flat backend layout
-    models/           # legacy flat backend layout
-    alembic/
+    config.py
+    database.py
+    routes/
+    services/
+    models/
     uploads/
     requirements.txt
     cognivara.db
@@ -71,6 +55,8 @@ test_case_2/
     frontend/
       test_1.html
       new_frontend.txt
+      components/       # unused componentized layout, superseded by app.js
+      scripts/          # api.js, recording.js, ui.js, component-loader.js
   package.json
   package-lock.json
   pyrightconfig.json
@@ -80,11 +66,11 @@ test_case_2/
 
 ## Structure Notes
 
-- `frontend/` contains the browser application.
+- `frontend/` contains the browser application. It is intentionally small: `index.html`, `main.css`, `app.js`, `background.js` are the entire runtime frontend.
 - `services/node/` contains the Node.js service that serves the frontend and proxies external inference calls.
-- `backend/` contains the Python backend plus migrations.
+- `backend/` contains the Python backend (`routes/`, `services/`, `models/`), with its own ad hoc SQLite schema upgrades in `database.py` — there is no separate migrations tool wired in.
 - `backend/uploads/` and `backend/cognivara.db` are local runtime artifacts and should not be treated as source code.
-- `archive/` is reference material only.
+- `archive/` is reference material only, including a superseded componentized frontend layout that was never wired into `index.html`.
 
 ## Run Node Service
 

@@ -4,7 +4,7 @@ CogniVara - User Model
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Integer, String
+from sqlalchemy import Boolean, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database import Base
@@ -19,6 +19,8 @@ class User(Base):
     age: Mapped[int | None] = mapped_column(Integer, nullable=True)
     gender: Mapped[str | None] = mapped_column(String(24), nullable=True)
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    google_sub: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True, index=True)
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     latest_csi_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     total_sessions: Mapped[int] = mapped_column(Integer, default=0)
     last_session_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
