@@ -2281,7 +2281,7 @@
 
     .research-page-inner {
       padding-top: 96px;
-      max-width: 1100px;
+      max-width: 1020px;
       margin: 0 auto;
       padding-left: 52px;
       padding-right: 52px;
@@ -2289,58 +2289,134 @@
     }
 
     .research-header {
-      margin-bottom: 40px;
+      margin-bottom: 36px;
+      max-width: 640px;
     }
 
-    .research-studies-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-      gap: 16px;
-      margin-bottom: 48px;
+    /* Tier labels mark evidence weight explicitly instead of styling every
+       study identically — primary vs. supporting vs. context. */
+    .research-tier-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1.6px;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin: 0 0 16px;
     }
 
-    .research-study-card {
+    .research-stats {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
       background: var(--surface);
       border: 1px solid var(--border);
-      border-left: 3px solid var(--teal);
       border-radius: var(--radius-md);
-      padding: 20px 22px;
-      transition: border-color 0.2s ease, transform 0.2s ease;
+      padding: 24px 36px;
+      box-shadow: var(--shadow-sm);
+      margin-bottom: 52px;
     }
 
-    .research-study-card:hover {
-      border-color: var(--border);
-      border-left-color: var(--blue);
-      transform: translateY(-2px);
+    .research-stat {
+      text-align: center;
+      flex: 1;
+      min-width: 130px;
+      padding: 6px 10px;
     }
 
-    .research-study-title {
+    .research-stat-num {
+      font-family: 'Outfit', sans-serif;
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: -0.4px;
+      color: var(--navy);
+    }
+
+    .research-stat-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 4px;
+      font-weight: 500;
+    }
+
+    .research-stat-divider {
+      width: 1px;
+      height: 32px;
+      background: var(--border);
+    }
+
+    /* ── Primary evidence: featured, given visual weight ── */
+    .research-featured-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 18px;
+      margin-bottom: 52px;
+    }
+
+    .research-featured-card {
+      background: linear-gradient(165deg, rgba(20, 241, 217, 0.05), rgba(20, 241, 217, 0) 45%), var(--surface);
+      border: 1px solid var(--border);
+      border-top: 2px solid var(--teal);
+      border-radius: var(--radius-lg);
+      padding: 26px 26px 24px;
+    }
+
+    .research-featured-kicker {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.6px;
+      text-transform: uppercase;
+      color: var(--teal);
+      margin-bottom: 16px;
+    }
+
+    .research-featured-metric {
+      font-family: 'Outfit', sans-serif;
+      font-size: 34px;
+      font-weight: 700;
+      color: var(--navy);
+      letter-spacing: -0.8px;
+      margin-bottom: 12px;
+    }
+
+    .research-featured-metric span {
       font-size: 14px;
       font-weight: 600;
-      color: var(--teal);
-      margin-bottom: 8px;
+      color: var(--text-muted);
+      letter-spacing: 0;
+      margin-left: 6px;
     }
 
-    .research-study-quote {
+    .research-featured-title {
+      font-size: 14.5px;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 12px;
+    }
+
+    .research-featured-quote {
       font-size: 13px;
       font-style: italic;
       color: var(--text-secondary);
-      line-height: 1.55;
-      margin-bottom: 10px;
+      line-height: 1.6;
+      padding-left: 12px;
+      border-left: 2px solid var(--border);
+      margin-bottom: 14px;
     }
 
-    .research-study-takeaway {
-      font-size: 13px;
+    .research-featured-note {
+      font-size: 12.5px;
       color: var(--text-muted);
-      line-height: 1.55;
+      line-height: 1.6;
     }
 
+    /* ── Supporting evidence: compact reference table, not repeated cards ── */
     .research-table-card {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: var(--radius-md);
       padding: 8px 4px;
-      margin-bottom: 48px;
+      margin-bottom: 52px;
       overflow-x: auto;
     }
 
@@ -2353,73 +2429,153 @@
 
     .research-table th {
       text-align: left;
-      color: var(--teal);
+      color: var(--text-muted);
       font-weight: 600;
+      font-size: 11px;
+      letter-spacing: 0.4px;
+      text-transform: uppercase;
       padding: 12px 14px;
-      border-bottom: 2px solid var(--border);
+      border-bottom: 1px solid var(--border);
       white-space: nowrap;
     }
 
     .research-table td {
-      padding: 10px 14px;
+      padding: 11px 14px;
       color: var(--text-secondary);
       border-bottom: 1px solid var(--border-soft);
       white-space: nowrap;
     }
 
-    .research-table td.research-score {
-      color: var(--risk-low);
-      font-weight: 700;
+    .research-table tr:last-child td {
+      border-bottom: none;
     }
 
-    .research-validates-card {
+    .research-table td.research-score {
+      color: var(--text-primary);
+      font-weight: 700;
+      font-family: 'Outfit', sans-serif;
+    }
+
+    /* ── Additional context: lowest tier, plain list, no card treatment ── */
+    .research-context-list {
+      border-top: 1px solid var(--border-soft);
+      margin-bottom: 52px;
+    }
+
+    .research-context-item {
+      display: flex;
+      gap: 24px;
+      padding: 16px 0;
+      border-bottom: 1px solid var(--border-soft);
+    }
+
+    .research-context-item-title {
+      flex: 0 0 230px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-secondary);
+    }
+
+    .research-context-item-text {
+      flex: 1;
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    /* ── Why this matters: narrative + numbered takeaways, not a checkmark grid ── */
+    .research-why {
+      display: grid;
+      grid-template-columns: 0.85fr 1.15fr;
+      gap: 40px;
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: var(--radius-md);
-      padding: 28px 26px;
-      margin-bottom: 32px;
+      padding: 32px 30px;
+      margin-bottom: 36px;
     }
 
-    .research-validates-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 14px;
+    .research-why-text p {
+      font-size: 14px;
+      color: var(--text-secondary);
+      line-height: 1.75;
     }
 
-    .research-validates-item {
+    .research-why-list {
+      list-style: none;
+      counter-reset: research-why;
       display: flex;
-      align-items: flex-start;
-      gap: 10px;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .research-why-list li {
+      counter-increment: research-why;
+      position: relative;
+      padding-left: 32px;
       font-size: 13px;
       color: var(--text-secondary);
-      line-height: 1.5;
+      line-height: 1.6;
     }
 
-    .research-validates-item svg {
-      flex-shrink: 0;
-      margin-top: 2px;
-      color: var(--risk-low);
+    .research-why-list li::before {
+      content: counter(research-why);
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: rgba(20, 241, 217, 0.12);
+      color: var(--teal);
+      font-size: 11px;
+      font-weight: 700;
+      font-family: 'Outfit', sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .research-why-list li strong {
+      color: var(--text-primary);
+      font-weight: 600;
     }
 
     .research-disclaimer {
-      background: rgba(245, 158, 11, 0.08);
-      border: 1px solid rgba(245, 158, 11, 0.35);
-      border-radius: var(--radius-md);
-      padding: 18px 22px;
+      border-top: 1px solid var(--border);
+      padding-top: 18px;
       margin-bottom: 32px;
+      max-width: 680px;
     }
 
     .research-disclaimer-title {
-      font-size: 13px;
+      font-size: 11px;
       font-weight: 700;
-      color: var(--risk-moderate);
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--text-muted);
       margin-bottom: 6px;
     }
 
     .research-disclaimer-text {
-      font-size: 13px;
-      color: var(--text-secondary);
-      line-height: 1.55;
+      font-size: 12.5px;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    @media(max-width:640px) {
+      .research-why {
+        grid-template-columns: 1fr;
+      }
+
+      .research-context-item {
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .research-context-item-title {
+        flex-basis: auto;
+      }
     }
 
     @media(max-width:900px) {
