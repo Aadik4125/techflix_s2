@@ -1281,6 +1281,12 @@
       border: 1px solid #fca5a5;
     }
 
+    .risk-status-badge.building {
+      background: #f3f4f6;
+      color: #374151;
+      border: 1px solid #d1d5db;
+    }
+
     .risk-info h2 {
       font-family: 'Outfit', sans-serif;
       font-size: 28px;

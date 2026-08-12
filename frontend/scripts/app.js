@@ -280,7 +280,7 @@
       };
     }
 
-    function buildAnalysisFromParsedSessions(perSession, transcripts, sourceLabel) {
+    function buildAnalysisFromParsedSessions(perSession, transcripts, sourceLabel, options = {}) {
       const emoArr = perSession.map(p => clampScore(p.emo));
       const cogArr = perSession.map(p => clampScore(p.cog));
       const csiArr = perSession.map(p => clampScore(p.csi ?? p.cog));
@@ -288,18 +288,37 @@
       const linArr = perSession.map(p => clampScore(p.lin));
       const riskArr = perSession.map(p => clampScore(p.risk));
 
-      const riskMean = riskArr.reduce((a, b) => a + b, 0) / Math.max(riskArr.length, 1);
-      const sortedRisk = [...riskArr].sort((a, b) => a - b);
-      const mid = Math.floor(sortedRisk.length / 2);
-      const riskMedian = sortedRisk.length % 2
-        ? sortedRisk[mid]
-        : Math.round((sortedRisk[mid - 1] + sortedRisk[mid]) / 2);
-      const spread = (sortedRisk[sortedRisk.length - 1] ?? 50) - (sortedRisk[0] ?? 50);
-      let riskScore = Math.round(riskMedian * 0.60 + riskMean * 0.40);
-      // Damp high volatility across sessions to keep scoring fair and stable.
-      const neutralPull = Math.max(0, Math.min(0.48, (spread - 10) / 70));
-      riskScore = clampScore(Math.round(riskScore * (1 - neutralPull) + 50 * neutralPull));
-      riskScore = soberizeScore(riskScore, 0.22);
+      // When some entries are known placeholders (e.g. demo sessions before the baseline
+      // completes) rather than independent real evaluations, blending them into a median/mean
+      // drags the one real score toward the neutral midpoint regardless of its true value —
+      // so the headline numbers come from the last real session instead of the whole set.
+      const realIdx = options.headlineFromLastReal
+        ? perSession.reduce((last, p, i) => (p.isReal ? i : last), -1)
+        : -1;
+
+      let riskScore, csiScore, emoIdx, fluIdx;
+      if (realIdx >= 0) {
+        riskScore = riskArr[realIdx];
+        csiScore = csiArr[realIdx];
+        emoIdx = emoArr[realIdx];
+        fluIdx = linArr[realIdx];
+      } else {
+        const riskMean = riskArr.reduce((a, b) => a + b, 0) / Math.max(riskArr.length, 1);
+        const sortedRisk = [...riskArr].sort((a, b) => a - b);
+        const mid = Math.floor(sortedRisk.length / 2);
+        const riskMedian = sortedRisk.length % 2
+          ? sortedRisk[mid]
+          : Math.round((sortedRisk[mid - 1] + sortedRisk[mid]) / 2);
+        const spread = (sortedRisk[sortedRisk.length - 1] ?? 50) - (sortedRisk[0] ?? 50);
+        riskScore = Math.round(riskMedian * 0.60 + riskMean * 0.40);
+        // Damp high volatility across sessions to keep scoring fair and stable.
+        const neutralPull = Math.max(0, Math.min(0.48, (spread - 10) / 70));
+        riskScore = clampScore(Math.round(riskScore * (1 - neutralPull) + 50 * neutralPull));
+        riskScore = soberizeScore(riskScore, 0.22);
+        csiScore = Math.round(csiArr.reduce((a, b) => a + b, 0) / Math.max(csiArr.length, 1));
+        emoIdx = Math.round(emoArr.reduce((a, b) => a + b, 0) / Math.max(emoArr.length, 1));
+        fluIdx = Math.round(linArr.reduce((a, b) => a + b, 0) / Math.max(linArr.length, 1));
+      }
 
       let riskLabel, riskClass, riskColor, gradStop1, gradStop2, deltaText, deltaArrow;
       if (riskScore < 45) {
@@ -316,10 +335,7 @@
         deltaText = `Elevated concern`; deltaArrow = 'up';
       }
 
-      const emoIdx = Math.round(emoArr.reduce((a, b) => a + b, 0) / Math.max(emoArr.length, 1));
-      const csiScore = Math.round(csiArr.reduce((a, b) => a + b, 0) / Math.max(csiArr.length, 1));
       const cogIdx = csiScore;
-      const fluIdx = Math.round(linArr.reduce((a, b) => a + b, 0) / Math.max(linArr.length, 1));
 
       return {
         riskScore, riskLabel, riskClass, riskColor, gradStop1, gradStop2,
@@ -373,6 +389,7 @@
       if (DEMO_MODE && runUploads.length > 0) {
         const byId = new Map(runUploads.map(x => [x.id, x.data]));
         let prevRisk = null;
+        let prevWasReal = false;
         const perSession = runSessionIds.map((id) => {
           const data = byId.get(id);
           if (!data) {
@@ -380,6 +397,7 @@
               analysisTranscripts.find(t => Number(t.session) === id)?.text || ''
             );
             const risk = soberizeScore(local.risk, 0.28);
+            prevWasReal = false;
             return {
               session: id,
               emo: local.emo,
@@ -388,9 +406,17 @@
               lin: local.lin,
               csi: clampScore(100 - risk),
               risk,
+              isReal: false,
               insight: `Session ${id}: partial upload fallback (local estimate).`
             };
           }
+          // Sessions before the baseline is complete only ever carry the neutral placeholder
+          // (csi_score=50, baseline_ready=false) — there's no real evaluation for them yet.
+          // Only the session that comes back with baseline_ready=true has an actual computed
+          // score; treating the placeholders as equally real data points (for both the abrupt-
+          // jump clamp below and the final aggregate in buildAnalysisFromParsedSessions) drags
+          // the real evaluation toward the neutral midpoint regardless of its true value.
+          const isReal = data.baseline_ready === true;
           const csiRaw = clampScore(data?.csi?.csi_score ?? data?.user_latest_csi_score ?? 50);
           const driftRaw = Number(data?.drift?.overall_drift_score ?? 0);
           const driftNorm = clampScore(Math.round((Math.max(0, Math.min(3.5, driftRaw)) / 3.5) * 100));
@@ -399,13 +425,15 @@
           let risk = clampScore(Math.round((100 - csiRaw) * 0.86 + driftNorm * 0.14));
           risk = soberizeScore(risk, 0.32);
 
-          // Prevent abrupt visual jumps between consecutive sessions.
-          if (prevRisk !== null) {
+          // Prevent abrupt visual jumps between consecutive REAL sessions only — clamping the
+          // first real score against the prior placeholder's fake risk defeats the point of it.
+          if (prevRisk !== null && prevWasReal) {
             const delta = risk - prevRisk;
             const bounded = Math.max(-8, Math.min(8, delta));
             risk = clampScore(prevRisk + bounded);
           }
           prevRisk = risk;
+          prevWasReal = isReal;
 
           const cog = clampScore(Math.round(csiRaw * 0.9 + 5));
           const lin = clampScore(Math.round(csiRaw * 0.85 + 8));
@@ -419,6 +447,7 @@
             lin,
             csi: csiRaw,
             risk,
+            isReal,
             insight: `Session ${id}: backend-driven CSI and drift analysis.`
           };
         });
@@ -428,7 +457,8 @@
           analysisTranscripts,
           runUploads.length === runSessionIds.length
             ? 'Current-run backend analysis'
-            : 'Current-run mixed analysis'
+            : 'Current-run mixed analysis',
+          { headlineFromLastReal: true }
         );
       }
 
@@ -463,6 +493,14 @@
           } else if (riskScore >= 65) {
             riskLabel = 'High Risk'; riskClass = 'high'; riskColor = '#ef4444';
             gradStop1 = '#f59e0b'; gradStop2 = '#ef4444'; deltaText = 'Elevated concern'; deltaArrow = 'up';
+          }
+          // Before the baseline is ready there's no real evaluation yet — the score above is
+          // just the neutral placeholder. Say so plainly instead of showing a fabricated risk
+          // tier (e.g. "Moderate Risk") for a number that isn't a real assessment.
+          if (!jd.baseline_ready) {
+            riskLabel = 'Building Baseline'; riskClass = 'building'; riskColor = '#6b7280';
+            gradStop1 = '#9ca3af'; gradStop2 = '#6b7280';
+            deltaText = `${jd.baseline_sessions ?? 0}/${jd.sessions_needed ?? 3} check-ins so far`; deltaArrow = 'down';
           }
 
           const out = {
