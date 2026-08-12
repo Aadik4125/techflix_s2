@@ -570,19 +570,6 @@
       banner.textContent = '\u26A0\uFE0F ' + msg;
     }
 
-    function showDemoResultsBanner() {
-      let banner = document.getElementById('demo-results-banner');
-      if (!banner) {
-        banner = document.createElement('div');
-        banner.id = 'demo-results-banner';
-        banner.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:999;background:rgba(24,176,158,0.15);color:#0f7a6a;border:1px solid rgba(24,176,158,0.35);backdrop-filter:blur(12px);padding:14px 22px;border-radius:14px;font-size:14px;font-weight:500;font-family:Inter,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,0.25);max-width:92%;text-align:center;display:flex;gap:14px;align-items:center;flex-wrap:wrap;justify-content:center;';
-        document.body.appendChild(banner);
-      }
-      banner.innerHTML = `
-        <span>This was a one-time demo \u2014 nothing was saved. Sign up to start real tracking.</span>
-        <button type="button" onclick="document.getElementById('demo-results-banner').remove(); showLogin();" style="background:#18b09e;color:#fff;border:none;border-radius:8px;padding:6px 14px;font-weight:600;cursor:pointer;">Sign Up</button>
-      `;
-    }
 
     // ══════════════════════════════════════════════
     //  GRAPH RENDERING
@@ -1641,7 +1628,6 @@
             isRecordingTransition = false;
             setTimeout(() => {
               showDashboard();
-              if (DEMO_MODE) showDemoResultsBanner();
             }, 1400);
           })
           .catch(err => {
