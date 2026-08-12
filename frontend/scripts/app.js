@@ -1723,6 +1723,7 @@
       const profile = document.getElementById('profile-page');
       const settings = document.getElementById('settings-page');
       const compare = document.getElementById('compare-page');
+      const research = document.getElementById('research-page');
       const recording = document.getElementById('recording');
 
       // Only auto-sync when the home+record layout is visible.
@@ -1731,7 +1732,7 @@
 
       // Do not override explicit nav states for other pages.
       if (dashboard.classList.contains('show')) return;
-      if (profile.style.display === 'block' || settings.style.display === 'block' || compare.style.display === 'block') return;
+      if (profile.style.display === 'block' || settings.style.display === 'block' || compare.style.display === 'block' || research.style.display === 'block') return;
 
       const nav = document.querySelector('nav');
       const navBottom = (nav ? nav.getBoundingClientRect().bottom : 0) + 24;
@@ -1747,6 +1748,7 @@
       document.getElementById('profile-page').style.display = 'none';
       document.getElementById('settings-page').style.display = 'none';
       document.getElementById('compare-page').style.display = 'none';
+      document.getElementById('research-page').style.display = 'none';
     }
 
     function showHomeAndRecord() {
@@ -1947,6 +1949,20 @@
       document.getElementById('profile-dropdown').classList.remove('show');
       selectComparePatient(currentComparePatient);
       window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function showResearchPage() {
+      hideAllPages();
+      updateNav('nav-research');
+      document.getElementById('research-page').style.display = 'block';
+      document.getElementById('compare-float-btn').classList.remove('show');
+      document.getElementById('profile-dropdown').classList.remove('show');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      setTimeout(() => {
+        document.querySelectorAll('#research-page .reveal').forEach((el, i) => {
+          setTimeout(() => el.classList.add('visible'), i * 40);
+        });
+      }, 50);
     }
 
     function showSettingsPage() {
